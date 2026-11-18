@@ -61,7 +61,7 @@ async function loadEngine(engine: EngineId): Promise<void> {
 
 async function load({ engine = 'auto' }: { engine?: EngineChoice }): Promise<LoadInfo> {
   const gpu = await hasWebGPU();
-  const target: EngineId = engine === 'auto' ? (gpu ? 'webgpu-fp16' : 'wasm-q8') : engine;
+  const target: EngineId = engine === 'auto' || engine === 'system' ? (gpu ? 'webgpu-fp16' : 'wasm-q8') : engine;
   if (loaded && loaded.engine === target) return { ...loaded, cached: true };
   if (loading) await loading.catch(() => {});
   if (loaded && loaded.engine === target) return { ...loaded, cached: true };

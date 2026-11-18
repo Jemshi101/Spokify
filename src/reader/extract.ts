@@ -106,6 +106,13 @@ interface Paragraph extends TextMap {
   block: Element;
 }
 
+export interface CollectOptions {
+  /** Overrides block detection (the PDF viewer treats each page's text layer as one block). */
+  blockOf?: (el: Element) => Element;
+  /** Text inserted for a <br> (default newline = sentence break). The PDF viewer decides per element. */
+  brText?: string | ((br: Element) => string);
+}
+
 const INLINE = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid', 'contents', 'ruby']);
 
 /**
@@ -113,7 +120,7 @@ const INLINE = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid', 
  * a new paragraph starts whenever the nearest block-level ancestor changes. <br> becomes a newline,
  * which Intl.Segmenter treats as a sentence break.
  */
-function collectParagraphs(root: Element, range?: Range): Paragraph[] {
+function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = {}): Paragraph[] {
   const display = new Map<Element, string>();
   const styleOf = (el: Element) => {
     let d = display.get(el);
@@ -124,12 +131,13 @@ function collectParagraphs(root: Element, range?: Range): Paragraph[] {
     }
     return d;
   };
-  const blockOf = (el: Element): Element => {
+  const blockOf = opts.blockOf ?? ((el: Element): Element => {
     for (let e: Element | null = el; e; e = e.parentElement) {
       if (e === root || !INLINE.has(styleOf(e))) return e;
     }
     return root;
-  };
+  });
+  const brText = typeof opts.brText === 'function' ? opts.brText : () => (opts.brText as string | undefined) ?? '\n';
 
   const paragraphs: Paragraph[] = [];
   let cur: Paragraph | null = null;
@@ -148,7 +156,8 @@ function collectParagraphs(root: Element, range?: Range): Paragraph[] {
 
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     if (n.nodeType === Node.ELEMENT_NODE) {
-      if (cur) cur.text += '\n'; // <br>
+      const t = brText(n as Element); // <br>
+      if (cur && t && !cur.text.endsWith(t)) cur.text = cur.text.replace(/ $/, '') + t;
       continue;
     }
     const t = n as Text;
@@ -198,6 +207,7 @@ function segment(map: TextMap, out: Sentence[]) {
     const lead = raw.length - raw.trimStart().length;
     const body = raw.trim();
     if (!/[\p{L}\p{N}]/u.test(body)) continue;
+    if (/^(\d{1,4}|[ivxlc]{1,6})\.?$/i.test(body)) continue; // page numbers
     const base = from + lead;
     for (const [a, b] of chunkSentence(body)) {
       const text = body.slice(a, b).trim();
@@ -213,16 +223,37 @@ function segment(map: TextMap, out: Sentence[]) {
   }
 }
 
-export function extractPage(fromEl?: Element | null): Sentence[] {
-  let root = findArticleRoot();
+const END_SECTIONS = /^(references|external links|see also|further reading|notes|footnotes|citations|sources|bibliography|works cited|related (articles|posts|stories)|comments?)$/i;
+
+/** Headings, including wrappers like Wikipedia's <div class="mw-heading"><h2>…</h2></div>. */
+function isHeading(el: Element): boolean {
+  return /^H[1-6]$/.test(el.tagName) || el.matches('[role=heading]') || !!el.querySelector(':scope > :is(h1,h2,h3,h4,h5,h6)');
+}
+
+/** Drops trailing reference-style sections ("References", "External links", …) in the last part of the text. */
+function dropEndSections(paragraphs: Paragraph[]): Paragraph[] {
+  const cut = paragraphs.findIndex(
+    (p, i) => i >= paragraphs.length * 0.3 && isHeading(p.block) && END_SECTIONS.test(p.text.trim().replace(/\[edit\]$/i, '').trim()),
+  );
+  return cut > 0 ? paragraphs.slice(0, cut) : paragraphs;
+}
+
+export interface ExtractOptions extends CollectOptions {
+  /** Read this element instead of detecting the article. */
+  root?: Element;
+}
+
+export function extractPage(fromEl?: Element | null, opts: ExtractOptions = {}): Sentence[] {
+  let root = opts.root ?? findArticleRoot();
   if (fromEl && !root.contains(fromEl)) root = document.body;
-  let paragraphs = collectParagraphs(root);
+  let paragraphs = collectParagraphs(root, undefined, opts);
 
   // Include the page title when it sits above the article container.
-  const h1 = document.querySelector('h1');
+  const h1 = opts.root ? null : document.querySelector('h1');
   if (h1 && !root.contains(h1) && !h1.closest(SKIP_SELECTOR) && root.compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_PRECEDING) {
     paragraphs = [...collectParagraphs(h1), ...paragraphs];
   }
+  paragraphs = dropEndSections(paragraphs);
 
   if (fromEl) {
     const i = paragraphs.findIndex((p) => p.parts.some((part) => fromEl.contains(part.node)) || p.block.contains(fromEl));
@@ -233,13 +264,13 @@ export function extractPage(fromEl?: Element | null): Sentence[] {
   return out;
 }
 
-export function extractSelection(): Sentence[] {
+export function extractSelection(opts: CollectOptions = {}): Sentence[] {
   const sel = getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return [];
   const range = sel.getRangeAt(0);
   const c = range.commonAncestorContainer;
   const root = (c.nodeType === Node.ELEMENT_NODE ? c : c.parentElement) as Element;
   const out: Sentence[] = [];
-  for (const p of collectParagraphs(root, range)) segment(p, out);
+  for (const p of collectParagraphs(root, range, opts)) segment(p, out);
   return out;
 }

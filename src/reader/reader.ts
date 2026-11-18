@@ -1,0 +1,225 @@
+// Read-along UI shared by the content script and the PDF viewer:
+// highlighting, word timing, the floating player, and resume-where-you-left-off.
+import type { Sentence } from './extract';
+import { Player } from './player';
+import { loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
+import type { SpeechSegment, TabEvent } from '../shared/messages';
+import { loadPosition, savePosition, clearPosition } from './positions';
+
+export interface ReaderOptions {
+  /** Finds what to read. `fromEl` = start at this element (Alt+click). */
+  extract(mode: 'page' | 'selection', fromEl?: Element | null): Sentence[];
+  /** Key for remembering the reading position (null disables resume). */
+  positionKey(): string | null;
+  /** Set for extension pages: events arrive relayed via runtime messages addressed to this tab. */
+  tabId?: number;
+}
+
+type ExtractCmd = { type: 'extract'; mode: 'page' | 'selection' };
+
+export function createReader(opts: ReaderOptions) {
+  const hasHighlights = typeof CSS !== 'undefined' && 'highlights' in CSS;
+  let sentences: Sentence[] = [];
+  let current: { sid: number; starts: number[]; lastWord: number; raf: number; live: boolean } | null = null;
+  let readingKey: string | null = null;
+  const clock = { pos: 0, rate: 1, t0: 0, paused: false };
+  const stats = { sentences: 0, exact: 0 };
+  let userScrolledAt = 0;
+
+  const send = (msg: object) => chrome.runtime.sendMessage({ target: 'sw', ...msg });
+  const player = new Player({
+    onAction: (a) => send({ type: 'host', payload: { type: a } }),
+    onSpeed: (speed) => saveSettings({ speed }),
+  });
+  loadSettings().then((s) => player.setSpeed(s.speed));
+  onSettingsChanged((s) => player.setSpeed(s.speed));
+
+  const style = document.createElement('style');
+  style.textContent = `
+    ::highlight(tts-sentence) { background-color: rgba(255, 213, 79, 0.3); }
+    ::highlight(tts-word) { background-color: rgba(255, 179, 0, 0.85); color: #111; }`;
+  (document.head || document.documentElement).appendChild(style);
+
+  // ---------- reading ----------
+
+  async function start(found: Sentence[], resume: boolean) {
+    clear();
+    player.clearOffer();
+    sentences = found;
+    if (!sentences.length) {
+      player.status('Nothing to read here');
+      player.hideSoon();
+      return { ok: false, count: 0 };
+    }
+    stats.sentences = 0;
+    stats.exact = 0;
+    readingKey = resume ? opts.positionKey() : null;
+    let startAt = 0;
+    if (readingKey) {
+      const saved = await loadPosition(readingKey);
+      if (saved && saved.total === sentences.length && saved.sid > 0 && saved.sid < sentences.length - 1) startAt = saved.sid;
+    }
+    const segments: SpeechSegment[] = sentences.map((s) => ({ text: s.text, words: s.words.map((w) => w.text) }));
+    player.status('Starting…');
+    player.setPaused(false);
+    send({ type: 'read', segments, startAt, title: document.title });
+    if (startAt > 0) {
+      player.offer('Restart', () => {
+        if (readingKey) clearPosition(readingKey);
+        send({ type: 'read', segments, startAt: 0, title: document.title });
+      });
+    }
+    return { ok: true, count: sentences.length, startAt };
+  }
+
+  // ---------- highlighting ----------
+
+  function highlight(name: string, range: Range | null | undefined) {
+    if (!hasHighlights) return;
+    if (range) CSS.highlights.set(name, new Highlight(range));
+    else CSS.highlights.delete(name);
+  }
+
+  function clear() {
+    if (current) cancelAnimationFrame(current.raf);
+    current = null;
+    highlight('tts-sentence', null);
+    highlight('tts-word', null);
+  }
+
+  const mediaTime = () => (clock.paused ? clock.pos : clock.pos + ((performance.now() - clock.t0) / 1000) * clock.rate);
+
+  function setClock(pos: number, rate: number, paused: boolean) {
+    Object.assign(clock, { pos, rate, paused, t0: performance.now() });
+  }
+
+  function follow(range: Range) {
+    if (Date.now() - userScrolledAt < 4000) return;
+    const r = range.getBoundingClientRect();
+    if (r.top < 80 || r.bottom > innerHeight - 120) scrollBy({ top: r.top - innerHeight / 3, behavior: 'smooth' });
+  }
+
+  function onSentence(e: Extract<TabEvent, { type: 'sentence' }>) {
+    const s = sentences[e.sid];
+    if (!s) return;
+    if (current) cancelAnimationFrame(current.raf);
+    stats.sentences++;
+    let starts = e.wordTimes;
+    if (e.live || starts.length === s.words.length) stats.exact++;
+    else {
+      // No model timings: spread words across the sentence by character position.
+      const voiced = Math.max(e.duration - 0.2, 0.1);
+      starts = s.words.map((w) => (w.charStart / s.text.length) * voiced);
+    }
+    current = { sid: e.sid, starts, lastWord: -1, raf: 0, live: !!e.live };
+    setClock(0, e.rate, false);
+    highlight('tts-sentence', s.range);
+    highlight('tts-word', null);
+    follow(s.range);
+    player.status(`${e.sid + 1} / ${e.total}`);
+    player.progress(e.sid, e.total);
+    debugState(e.sid, e.total);
+    if (readingKey) savePosition(readingKey, e.sid, e.total);
+    if (!e.live) tick();
+  }
+
+  function onWord(e: Extract<TabEvent, { type: 'word' }>) {
+    if (!current || current.sid !== e.sid) return;
+    current.lastWord = e.wi;
+    highlight('tts-word', sentences[e.sid]?.words[e.wi]?.range);
+    debugState(e.sid, sentences.length);
+  }
+
+  /** Exposes reading state on <html data-tts-reader> for tests/e2e.mjs. */
+  function debugState(sid: number, total: number) {
+    document.documentElement.dataset.ttsReader = JSON.stringify({ sid, total, rate: clock.rate, paused: clock.paused, word: current?.lastWord ?? -1, ...stats });
+  }
+
+  function tick() {
+    if (!current || current.live) return;
+    const t = mediaTime();
+    const { starts } = current;
+    let i = Math.max(current.lastWord, 0);
+    if (current.lastWord >= 0 && starts[i] > t) i = 0; // clock moved backwards
+    while (i + 1 < starts.length && starts[i + 1] <= t) i++;
+    if (starts.length && t >= starts[0] - 0.02 && i !== current.lastWord) {
+      current.lastWord = i;
+      highlight('tts-word', sentences[current.sid]?.words[i]?.range);
+    }
+    current.raf = requestAnimationFrame(tick);
+  }
+
+  // ---------- messages ----------
+
+  function handle(msg: TabEvent | ExtractCmd, respond: (r: unknown) => void): boolean | void {
+    switch (msg.type) {
+      case 'extract':
+        start(opts.extract(msg.mode), msg.mode === 'page').then(respond);
+        return true;
+      case 'sentence':
+        player.setPaused(false);
+        onSentence(msg);
+        return;
+      case 'word':
+        onWord(msg);
+        return;
+      case 'sync':
+        setClock(msg.pos, msg.rate, msg.paused);
+        player.setPaused(msg.paused);
+        if (current) debugState(current.sid, sentences.length);
+        if (msg.paused) player.status('Paused');
+        else if (current) player.status(`${current.sid + 1} / ${sentences.length}`);
+        return;
+      case 'buffering':
+        player.status(msg.sid === 0 ? 'Preparing voice…' : 'Generating…');
+        return;
+      case 'loading':
+        player.status(msg.percent == null ? 'Loading voice…' : `Downloading voice ${msg.percent}%`);
+        return;
+      case 'ended':
+        if (readingKey) clearPosition(readingKey);
+      // falls through
+      case 'stopped':
+        clear();
+        player.clearOffer();
+        player.status(msg.type === 'ended' ? 'Finished' : 'Stopped');
+        player.hideSoon();
+        return;
+      case 'error':
+        clear();
+        player.status(`Error: ${msg.message}`);
+        player.hideSoon(8000);
+        return;
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+    if (opts.tabId != null) {
+      // Extension page: only relayed messages for this tab.
+      if (msg?.target !== 'tab' || msg.tabId !== opts.tabId) return;
+      return handle(msg.payload, respond);
+    }
+    if (msg?.target) return; // content scripts get raw TabEvents from tabs.sendMessage
+    return handle(msg, respond);
+  });
+
+  // Alt+click a paragraph to read from there.
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (!e.altKey || e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      start(opts.extract('page', e.target as Element), false);
+    },
+    true,
+  );
+
+  // Pause auto-scroll while the user scrolls on their own.
+  for (const ev of ['wheel', 'touchmove'] as const) addEventListener(ev, () => (userScrolledAt = Date.now()), { passive: true });
+  addEventListener('keydown', (e) => {
+    if (['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'Home', 'End', ' '].includes(e.key)) userScrolledAt = Date.now();
+  });
+
+  return { start: (mode: 'page' | 'selection') => start(opts.extract(mode), mode === 'page') };
+}

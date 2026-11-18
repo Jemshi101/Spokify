@@ -8,7 +8,9 @@ export interface SpeechSegment {
 
 /** Host → content script (relayed by the service worker). */
 export type TabEvent =
-  | { type: 'sentence'; sid: number; total: number; wordTimes: number[]; duration: number; rate: number }
+  /** live = word positions arrive as 'word' events (system voices) instead of a timing table. */
+  | { type: 'sentence'; sid: number; total: number; wordTimes: number[]; duration: number; rate: number; live?: boolean }
+  | { type: 'word'; sid: number; wi: number }
   | { type: 'sync'; sid: number; pos: number; rate: number; paused: boolean }
   | { type: 'buffering'; sid: number; total: number }
   | { type: 'loading'; percent: number | null }
@@ -20,7 +22,7 @@ export type TabEvent =
 export type HostCommand =
   | { type: 'ping' }
   | { type: 'warmup'; settings: Settings }
-  | { type: 'read'; tabId: number; segments: SpeechSegment[]; settings: Settings; startAt?: number }
+  | { type: 'read'; tabId: number; segments: SpeechSegment[]; settings: Settings; startAt?: number; title?: string }
   | { type: 'settings'; settings: Settings }
   | { type: 'toggle' | 'pause' | 'resume' | 'next' | 'prev' | 'stop' | 'status' | 'env' }
   | { type: 'jump'; sid: number }
@@ -29,13 +31,20 @@ export type HostCommand =
 
 export type PlayerAction = 'toggle' | 'next' | 'prev' | 'stop';
 
+/** Where the host delivers TabEvents for viewer pages (extension pages can't receive tabs.sendMessage). */
+export interface TabRelay {
+  target: 'tab';
+  tabId: number;
+  payload: TabEvent | { type: 'extract'; mode: 'page' | 'selection' };
+}
+
 export interface HostStatus {
   active: boolean;
   paused: boolean;
   tabId: number | null;
   sid: number | null;
   total: number;
-  engine: EngineId | null;
+  engine: EngineId | 'system' | null;
   stats: ReadingStats | null;
 }
 

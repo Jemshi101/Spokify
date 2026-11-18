@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Welcome to TTS Reader</title>
+<style>
+  :root { --bg:#f6f6f8; --card:#fff; --fg:#1d1d1f; --muted:#5f5f68; --line:#e2e2e8; --accent:#2f6fed; --amber:#ffb300; --ok:#1a7f37; --warn:#9a5b00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141417; --card:#1e1e23; --fg:#ececf0; --muted:#a0a0aa; --line:#33333b; --ok:#4ac26b; --warn:#ffb74d; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 64px; }
+  .hero { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+  .hero img { width: 56px; height: 56px; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
+  .lead { color: var(--muted); font-size: 17px; margin: 8px 0 32px; }
+  .lead mark { background: rgba(255, 179, 0, 0.35); color: inherit; border-radius: 3px; padding: 0 2px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; }
+  h2 { font-size: 16px; margin: 0 0 6px; display: flex; align-items: center; gap: 10px; }
+  .step { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; flex: none; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  button { padding: 9px 16px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .6; cursor: default; }
+  .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 12px 0 6px; }
+  .bar div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .note { font-size: 13px; color: var(--muted); min-height: 18px; }
+  .note.ok { color: var(--ok); } .note.warn { color: var(--warn); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  select { padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; max-width: 100%; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 7px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { width: 42%; padding-right: 12px; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  kbd { font: 12px ui-monospace, monospace; background: var(--bg); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="hero">
+    <img src="icons/128.png" alt="">
+    <h1>TTS Reader is ready</h1>
+  </div>
+  <p class="lead">Natural voices that run entirely on your computer. Pages are read aloud with the <mark>current word</mark> highlighted, even while you switch tabs.</p>
+
+  <section>
+    <h2><span class="step">1</span>Get the voice</h2>
+    <p id="engineText">Checking your browser…</p>
+    <div id="download" hidden>
+      <button id="get" class="primary">Download voice (~165 MB)</button>
+      <div class="bar"><div id="progress"></div></div>
+    </div>
+    <div class="note" id="engineNote"></div>
+  </section>
+
+  <section>
+    <h2><span class="step">2</span>Try it</h2>
+    <p>Pick a voice and listen. You can change this any time from the toolbar icon.</p>
+    <div class="row">
+      <select id="voice" aria-label="Voice"></select>
+      <button id="play" class="primary">Play sample</button>
+    </div>
+    <div class="note" id="playNote"></div>
+  </section>
+
+  <section>
+    <h2><span class="step">3</span>Start reading</h2>
+    <table>
+      <tr><td>Read the current page</td><td><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>R</kbd>, or the toolbar icon</td></tr>
+      <tr><td>Start from a paragraph</td><td><kbd>Alt</kbd> + click it</td></tr>
+      <tr><td>Read a selection</td><td>Right-click → <b>Read selection aloud</b></td></tr>
+      <tr><td>Pause / resume</td><td><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>P</kbd>, or your keyboard's media key</td></tr>
+      <tr><td>Next / previous sentence</td><td><kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>.</kbd> / <kbd>,</kbd></td></tr>
+      <tr><td>PDFs</td><td>Press Read on a PDF tab, or right-click a PDF link → <b>Read PDF aloud</b></td></tr>
+    </table>
+  </section>
+</main>
+<script src="welcome.js" type="module"></script>
+</body>
+</html>

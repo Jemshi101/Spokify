@@ -1,8 +1,14 @@
 // Audio host (offscreen document, or a pinned tab where chrome.offscreen is missing).
-// Owns the TTS worker and playback, so reading continues while the user switches tabs.
-import { splitSpeed, type EngineChoice, type Settings } from '../shared/settings';
+// Owns speech generation and playback, so reading continues while the user switches tabs.
+//
+// Two playback paths behind one session:
+//  - kokoro: the TTS worker renders sentences ahead of time; <audio> plays them.
+//  - system: the browser's speechSynthesis (lite mode for machines without WebGPU);
+//            word highlighting comes from its boundary events.
+import { splitSpeed, type Settings } from '../shared/settings';
 import type { HostCommand, HostStatus, LoadInfo, ReadingStats, SpeechSegment, TabEvent } from '../shared/messages';
 import { floatWav } from './wav';
+import { pickSystemVoice, systemVoices } from './voices';
 
 const LOOKAHEAD = 3;
 
@@ -38,6 +44,24 @@ worker.onmessage = ({ data }) => {
   data.error ? p.reject(new Error(data.error)) : p.resolve(data.result);
 };
 
+let gpuCheck: Promise<boolean> | null = null;
+function hasWebGPU(): Promise<boolean> {
+  gpuCheck ??= (async () => {
+    try {
+      return !!(await (navigator as any).gpu?.requestAdapter());
+    } catch {
+      return false;
+    }
+  })();
+  return gpuCheck;
+}
+
+async function resolveKind(settings: Settings): Promise<'kokoro' | 'system'> {
+  if (settings.engine === 'system') return 'system';
+  if (settings.engine === 'auto') return (await hasWebGPU()) ? 'kokoro' : 'system';
+  return 'kokoro';
+}
+
 // ---------- session ----------
 
 interface Clip {
@@ -49,20 +73,26 @@ interface Clip {
 }
 
 interface Session {
+  kind: 'kokoro' | 'system';
   tabId: number;
+  title: string;
   segments: SpeechSegment[];
   settings: Settings;
   idx: number;
+  paused: boolean;
+  t0: number;
+  engine: HostStatus['engine'];
+  stats: ReadingStats;
+  // kokoro
   genIdx: number;
   epoch: number;
   clips: Map<number, Clip>;
   audio: HTMLAudioElement | null;
-  paused: boolean;
   waiting: boolean;
   pumping: boolean;
-  t0: number;
-  engine: LoadInfo['engine'] | null;
-  stats: ReadingStats;
+  // system
+  utter: SpeechSynthesisUtterance | null;
+  wordIdx: number;
 }
 
 let session: Session | null = null;
@@ -86,8 +116,47 @@ function status(): HostStatus {
 
 function emit(s: Session, payload: TabEvent) {
   toTab(s.tabId, payload);
-  chrome.runtime.sendMessage({ target: 'ui', type: 'status', status: status() }).catch(() => {});
+  if (payload.type !== 'word') chrome.runtime.sendMessage({ target: 'ui', type: 'status', status: status() }).catch(() => {});
 }
+
+async function read(m: { tabId: number; segments: SpeechSegment[]; settings: Settings; startAt?: number; title?: string }, restart = false) {
+  // Same tab (restart, engine switch): replace silently. Another tab: tell the old one it stopped.
+  if (session) restart || session.tabId === m.tabId ? teardown(session) : stop();
+  const kind = await resolveKind(m.settings);
+  const s: Session = {
+    kind,
+    tabId: m.tabId,
+    title: m.title ?? '',
+    segments: m.segments,
+    settings: m.settings,
+    idx: m.startAt ?? 0,
+    paused: false,
+    t0: performance.now(),
+    engine: kind === 'system' ? 'system' : null,
+    stats: { generated: 0, genMs: 0, audioSec: 0, exactWords: 0, firstAudioMs: null },
+    genIdx: m.startAt ?? 0,
+    epoch: 0,
+    clips: new Map(),
+    audio: null,
+    waiting: true,
+    pumping: false,
+    utter: null,
+    wordIdx: 0,
+  };
+  session = s;
+  updateMediaSession(s);
+  emit(s, { type: 'buffering', sid: s.idx, total: s.segments.length });
+  if (kind === 'system') speakSystem(s, 0);
+  else pump(s);
+}
+
+function finish(s: Session) {
+  emit(s, { type: 'ended' });
+  if (session === s) session = null;
+  updateMediaSession(null);
+}
+
+// ---------- kokoro path ----------
 
 function dropClip(s: Session, i: number) {
   const c = s.clips.get(i);
@@ -96,31 +165,11 @@ function dropClip(s: Session, i: number) {
 }
 
 function sync(s: Session) {
-  if (!s.audio) return;
-  emit(s, { type: 'sync', sid: s.idx, pos: s.audio.currentTime, rate: s.audio.playbackRate, paused: s.paused });
-}
-
-async function read({ tabId, segments, settings, startAt = 0 }: { tabId: number; segments: SpeechSegment[]; settings: Settings; startAt?: number }) {
-  stop();
-  const s: Session = {
-    tabId,
-    segments,
-    settings,
-    idx: startAt,
-    genIdx: startAt,
-    epoch: 0,
-    clips: new Map(),
-    audio: null,
-    paused: false,
-    waiting: true,
-    pumping: false,
-    t0: performance.now(),
-    engine: null,
-    stats: { generated: 0, genMs: 0, audioSec: 0, exactWords: 0, firstAudioMs: null },
-  };
-  session = s;
-  emit(s, { type: 'buffering', sid: s.idx, total: segments.length });
-  pump(s);
+  if (s.kind === 'system') {
+    emit(s, { type: 'sync', sid: s.idx, pos: 0, rate: 1, paused: s.paused });
+    return;
+  }
+  emit(s, { type: 'sync', sid: s.idx, pos: s.audio?.currentTime ?? 0, rate: s.audio?.playbackRate ?? 1, paused: s.paused });
 }
 
 async function pump(s: Session) {
@@ -138,7 +187,7 @@ async function pump(s: Session) {
         words: seg.words,
         voice: s.settings.voice,
         speed: modelSpeed,
-        engine: s.settings.engine as EngineChoice,
+        engine: s.settings.engine === 'system' ? 'auto' : s.settings.engine,
       });
       if (session !== s) return;
       s.engine = r.engine;
@@ -148,7 +197,7 @@ async function pump(s: Session) {
       s.stats.genMs += r.genMs;
       s.stats.audioSec += r.audioSec;
       if (r.exact) s.stats.exactWords++;
-      if (s.waiting && i === s.idx) playCurrent(s);
+      if (s.waiting && i === s.idx) playClip(s);
     }
   } catch (e) {
     if (session === s) {
@@ -160,13 +209,9 @@ async function pump(s: Session) {
   }
 }
 
-function playCurrent(s: Session) {
+function playClip(s: Session) {
   if (session !== s) return;
-  if (s.idx >= s.segments.length) {
-    emit(s, { type: 'ended' });
-    session = null;
-    return;
-  }
+  if (s.idx >= s.segments.length) return finish(s);
   const clip = s.clips.get(s.idx);
   if (!clip) {
     s.waiting = true;
@@ -183,7 +228,7 @@ function playCurrent(s: Session) {
     if (session !== s || s.audio !== audio) return;
     dropClip(s, s.idx);
     s.idx++;
-    playCurrent(s);
+    playClip(s);
   };
   s.audio = audio;
   const started = () => {
@@ -192,11 +237,8 @@ function playCurrent(s: Session) {
     emit(s, { type: 'sentence', sid: s.idx, total: s.segments.length, wordTimes: clip.wordTimes, duration: clip.audioSec, rate: audio.playbackRate });
     if (s.paused) sync(s);
   };
-  if (s.paused) {
-    started();
-  } else {
-    audio.play().then(started, (e) => emit(s, { type: 'error', message: `Playback failed: ${e.message}` }));
-  }
+  if (s.paused) started();
+  else audio.play().then(started, (e) => emit(s, { type: 'error', message: `Playback failed: ${e.message}` }));
   pump(s);
 }
 
@@ -207,38 +249,121 @@ function stopAudio(s: Session) {
   s.audio = null;
 }
 
+// ---------- system path ----------
+
+function wordCharStarts(seg: SpeechSegment): number[] {
+  const starts: number[] = [];
+  let cursor = 0;
+  for (const w of seg.words) {
+    const i = seg.text.indexOf(w, cursor);
+    starts.push(i < 0 ? cursor : i);
+    if (i >= 0) cursor = i + w.length;
+  }
+  return starts;
+}
+
+async function speakSystem(s: Session, fromWord: number) {
+  if (session !== s) return;
+  if (s.idx >= s.segments.length) return finish(s);
+  const seg = s.segments[s.idx];
+  const starts = wordCharStarts(seg);
+  const offset = fromWord > 0 ? (starts[fromWord] ?? 0) : 0;
+  const u = new SpeechSynthesisUtterance(seg.text.slice(offset));
+  const voice = await pickSystemVoice(s.settings.systemVoice);
+  if (session !== s) return;
+  if (voice) {
+    u.voice = voice;
+    u.lang = voice.lang;
+  } else {
+    u.lang = 'en-US';
+  }
+  u.rate = s.settings.speed;
+  const stale = () => session !== s || s.utter !== u;
+  u.onstart = () => {
+    if (stale()) return;
+    s.stats.firstAudioMs ??= Math.round(performance.now() - s.t0);
+    if (fromWord === 0) emit(s, { type: 'sentence', sid: s.idx, total: s.segments.length, wordTimes: [], duration: 0, rate: 1, live: true });
+    else sync(s);
+    s.wordIdx = fromWord;
+    emit(s, { type: 'word', sid: s.idx, wi: fromWord });
+  };
+  u.onboundary = (e) => {
+    if (stale() || e.name !== 'word') return;
+    const pos = offset + e.charIndex;
+    let wi = s.wordIdx;
+    while (wi + 1 < starts.length && starts[wi + 1] <= pos) wi++;
+    if (wi !== s.wordIdx) {
+      s.wordIdx = wi;
+      emit(s, { type: 'word', sid: s.idx, wi });
+    }
+  };
+  u.onend = () => {
+    if (stale()) return;
+    s.utter = null;
+    s.idx++;
+    speakSystem(s, 0);
+  };
+  u.onerror = (e) => {
+    if (stale() || e.error === 'interrupted' || e.error === 'canceled') return;
+    emit(s, { type: 'error', message: `System voice error: ${e.error}` });
+    teardown(s);
+  };
+  s.utter = u;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+function silenceSystem(s: Session) {
+  s.utter = null;
+  speechSynthesis.cancel();
+}
+
+// ---------- controls ----------
+
 function pause() {
   const s = session;
   if (!s || s.paused) return;
   s.paused = true;
-  s.audio?.pause();
+  if (s.kind === 'system') silenceSystem(s); // speechSynthesis.pause() is unreliable; resume restarts at the current word
+  else s.audio?.pause();
   sync(s);
-  if (!s.audio) emit(s, { type: 'sync', sid: s.idx, pos: 0, rate: 1, paused: true });
+  updateMediaSession(s);
 }
 
 function resume() {
   const s = session;
   if (!s || !s.paused) return;
   s.paused = false;
-  if (s.audio) s.audio.play().then(() => sync(s), () => {});
-  else emit(s, { type: 'sync', sid: s.idx, pos: 0, rate: 1, paused: false });
+  if (s.kind === 'system') speakSystem(s, s.wordIdx);
+  else if (s.audio) s.audio.play().then(() => sync(s), () => {});
+  else sync(s);
+  updateMediaSession(s);
 }
 
 function jump(target: number) {
   const s = session;
   if (!s) return;
   target = Math.max(0, Math.min(s.segments.length - 1, target));
+  s.idx = target;
+  if (s.kind === 'system') {
+    silenceSystem(s);
+    s.wordIdx = 0;
+    if (s.paused) emit(s, { type: 'sentence', sid: s.idx, total: s.segments.length, wordTimes: [], duration: 0, rate: 1, live: true });
+    else speakSystem(s, 0);
+    return;
+  }
   stopAudio(s);
   for (const k of [...s.clips.keys()]) if (k < target || k > target + LOOKAHEAD) dropClip(s, k);
-  s.idx = target;
   s.genIdx = target;
-  playCurrent(s);
+  playClip(s);
 }
 
 function teardown(s: Session) {
   if (session === s) session = null;
   stopAudio(s);
+  if (s.kind === 'system') silenceSystem(s);
   for (const k of [...s.clips.keys()]) dropClip(s, k);
+  updateMediaSession(null);
 }
 
 function stop() {
@@ -248,13 +373,26 @@ function stop() {
   emit(s, { type: 'stopped' });
 }
 
-function applySettings(next: Settings) {
+async function applySettings(next: Settings) {
   const s = session;
   if (!s) return;
   const prev = s.settings;
   s.settings = next;
-  const needsRegen =
-    prev.voice !== next.voice || prev.engine !== next.engine || splitSpeed(prev.speed).modelSpeed !== splitSpeed(next.speed).modelSpeed;
+
+  if ((await resolveKind(next)) !== s.kind) {
+    // Engine family changed: restart this sentence with the other engine.
+    const { tabId, segments, idx, title, paused } = s;
+    await read({ tabId, segments, settings: next, startAt: idx, title }, true);
+    if (paused) pause();
+    return;
+  }
+
+  if (s.kind === 'system') {
+    if ((prev.speed !== next.speed || prev.systemVoice !== next.systemVoice) && !s.paused) speakSystem(s, s.wordIdx);
+    return;
+  }
+
+  const needsRegen = prev.voice !== next.voice || prev.engine !== next.engine || splitSpeed(prev.speed).modelSpeed !== splitSpeed(next.speed).modelSpeed;
   if (needsRegen) {
     // Keep the sentence that's playing; regenerate everything queued after it.
     s.epoch++;
@@ -269,19 +407,60 @@ function applySettings(next: Settings) {
   }
 }
 
+// ---------- media keys / OS media controls ----------
+
+function updateMediaSession(s: Session | null) {
+  const ms = navigator.mediaSession;
+  if (!ms) return;
+  if (!s) {
+    ms.metadata = null;
+    ms.playbackState = 'none';
+    return;
+  }
+  ms.metadata = new MediaMetadata({ title: s.title || 'Reading aloud', artist: 'TTS Reader' });
+  ms.playbackState = s.paused ? 'paused' : 'playing';
+}
+
+if (navigator.mediaSession) {
+  const handlers: [MediaSessionAction, () => void][] = [
+    ['play', resume],
+    ['pause', pause],
+    ['stop', stop],
+    ['nexttrack', () => session && jump(session.idx + 1)],
+    ['previoustrack', () => session && jump(session.idx - 1)],
+  ];
+  for (const [action, fn] of handlers) {
+    try { navigator.mediaSession.setActionHandler(action, fn); } catch {}
+  }
+}
+
+// ---------- diagnostics / samples ----------
+
 async function speakSample({ text, settings }: { text: string; settings: Settings }) {
   stop();
+  if ((await resolveKind(settings)) === 'system') {
+    const u = new SpeechSynthesisUtterance(text);
+    const v = await pickSystemVoice(settings.systemVoice);
+    if (v) u.voice = v;
+    u.rate = settings.speed;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+    return { engine: 'system', voice: v?.name ?? 'default' };
+  }
   const { modelSpeed, rate } = splitSpeed(settings.speed);
   const r = await rpc('generate', { text, words: [], voice: settings.voice, speed: modelSpeed, engine: settings.engine });
   const audio = new Audio(URL.createObjectURL(floatWav(r.samples, r.sampleRate)));
   audio.playbackRate = rate;
   await audio.play();
-  return { genMs: r.genMs, audioSec: +r.audioSec.toFixed(2), speedVsRealtime: +(r.audioSec / (r.genMs / 1000)).toFixed(2) };
+  return { engine: r.engine, genMs: r.genMs, audioSec: +r.audioSec.toFixed(2), speedVsRealtime: +(r.audioSec / (r.genMs / 1000)).toFixed(2) };
 }
 
 const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   ping: () => ({ ok: true, kind: chrome.tabs ? 'tab' : 'offscreen' }),
-  warmup: (m) => (rpc('load', { engine: m.settings.engine }).catch(() => {}), { ok: true }),
+  warmup: async (m) => {
+    if ((await resolveKind(m.settings)) === 'kokoro') rpc('load', { engine: m.settings.engine }).catch(() => {});
+    return { ok: true };
+  },
   read: (m) => (read(m), { ok: true }),
   settings: (m) => applySettings(m.settings),
   pause,
@@ -292,7 +471,10 @@ const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   jump: (m) => jump(m.sid),
   stop,
   status,
-  env: async () => ({ host: { crossOriginIsolated: self.crossOriginIsolated }, worker: await rpc('envReport') }),
+  env: async () => ({
+    host: { crossOriginIsolated: self.crossOriginIsolated, webgpu: await hasWebGPU(), systemVoices: (await systemVoices()).length },
+    worker: await rpc('envReport'),
+  }),
   benchmark: (m) => rpc('benchmark', { engine: m.engine }),
   speakSample,
 };
@@ -306,3 +488,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     .then((r) => sendResponse(r ?? { ok: true }), (e) => sendResponse({ error: String(e?.message ?? e) }));
   return true;
 });
+
+export type { LoadInfo };

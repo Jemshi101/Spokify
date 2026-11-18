@@ -1,4 +1,5 @@
 import { ENGINES, VOICES, loadSettings, saveSettings, type EngineChoice } from '../shared/settings';
+import { sortedSystemVoices } from '../host/voices';
 import type { HostStatus, UiEvent } from '../shared/messages';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -19,15 +20,32 @@ async function init() {
   const s = await loadSettings();
   $<HTMLSelectElement>('voice').innerHTML = VOICES.map((v) => `<option value="${v.id}">${v.label}</option>`).join('');
   $<HTMLSelectElement>('engine').innerHTML =
-    '<option value="auto">Auto (WebGPU fp16, CPU fallback)</option>' +
-    Object.entries(ENGINES).map(([id, e]) => `<option value="${id}">${e.label}</option>`).join('');
+    '<option value="auto">Auto (natural voice if WebGPU, else system)</option>' +
+    Object.entries(ENGINES).map(([id, e]) => `<option value="${id}">Natural · ${e.label}</option>`).join('') +
+    '<option value="system">Lite · system voices</option>';
+  const sys = await sortedSystemVoices();
+  $<HTMLSelectElement>('systemVoice').innerHTML =
+    '<option value="">Default English voice</option>' + sys.map((v) => `<option value="${v.voiceURI}">${v.name} (${v.lang})</option>`).join('');
+  $<HTMLSelectElement>('systemVoice').value = s.systemVoice;
+  const gpu = await (navigator as any).gpu?.requestAdapter().catch(() => null);
+  const showVoices = () => {
+    const e = $<HTMLSelectElement>('engine').value;
+    const lite = e === 'system' || (e === 'auto' && !gpu);
+    $('voice').hidden = lite;
+    $('systemVoice').hidden = !lite;
+  };
+  showVoices();
   $<HTMLSelectElement>('voice').value = s.voice;
   $<HTMLSelectElement>('engine').value = s.engine;
   $<HTMLInputElement>('speed').value = String(s.speed);
   $('speedVal').textContent = `${s.speed}×`;
 
   $('voice').onchange = () => saveSettings({ voice: $<HTMLSelectElement>('voice').value });
-  $('engine').onchange = () => saveSettings({ engine: $<HTMLSelectElement>('engine').value as EngineChoice });
+  $('engine').onchange = () => {
+    showVoices();
+    saveSettings({ engine: $<HTMLSelectElement>('engine').value as EngineChoice });
+  };
+  $('systemVoice').onchange = () => saveSettings({ systemVoice: $<HTMLSelectElement>('systemVoice').value });
   $('speed').oninput = () => {
     const v = +$<HTMLInputElement>('speed').value;
     $('speedVal').textContent = `${v}×`;
@@ -36,8 +54,14 @@ async function init() {
 
   const read = (mode: 'page' | 'selection') => async () => {
     const r = await sw({ type: 'extract', mode });
-    $('msg').textContent = r?.error ? `Can't read this page: ${r.error}` : r?.count ? `Starting ${r.count} sentences…` : 'Nothing to read here';
-    if (r?.count) setTimeout(() => window.close(), 600);
+    $('msg').textContent = r?.error
+      ? `Can't read this page: ${r.error}`
+      : r?.pdf
+        ? 'Opening the PDF reader…'
+        : r?.count
+          ? r.startAt ? `Resuming at sentence ${r.startAt + 1} of ${r.count}…` : `Starting ${r.count} sentences…`
+          : 'Nothing to read here';
+    if (r?.count || r?.pdf) setTimeout(() => window.close(), 700);
   };
   $('readPage').onclick = read('page');
   $('readSel').onclick = read('selection');

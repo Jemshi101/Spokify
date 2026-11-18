@@ -3,6 +3,7 @@ import { loadSettings } from '../shared/settings';
 import type { HostCommand } from '../shared/messages';
 
 const HOST_URL = 'host.html';
+const PDF_VIEWER = 'pdf.html';
 let creating: Promise<unknown> | null = null;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -74,6 +75,33 @@ async function activeTabId() {
 
 const stripHash = (u?: string) => (u ?? '').split('#')[0];
 
+/** Sends to a tab's content script and to extension pages in that tab (the PDF viewer). */
+function deliverToTab(tabId: number, payload: unknown) {
+  chrome.tabs.sendMessage(tabId, payload).catch(() => {});
+  chrome.runtime.sendMessage({ target: 'tab', tabId, payload }).catch(() => {});
+}
+
+function isViewer(url?: string) {
+  return !!url?.startsWith(chrome.runtime.getURL(PDF_VIEWER));
+}
+
+async function looksLikePdf(url: string): Promise<boolean> {
+  if (!/^(https?|file):/.test(url)) return false;
+  if (/\.pdf($|[?#])/i.test(url)) return true;
+  try {
+    const r = await fetch(url, { method: 'HEAD' });
+    return (r.headers.get('content-type') ?? '').includes('application/pdf');
+  } catch {
+    return false;
+  }
+}
+
+async function openPdf(tabId: number | undefined, url: string) {
+  const viewer = `${chrome.runtime.getURL(PDF_VIEWER)}?file=${encodeURIComponent(url)}&autoplay=1`;
+  if (tabId == null) await chrome.tabs.create({ url: viewer });
+  else await chrome.tabs.update(tabId, { url: viewer });
+}
+
 async function setReadingTab(tabId: number | null, url?: string) {
   await chrome.storage.session.set({ reading: tabId == null ? null : { tabId, url: stripHash(url) } });
 }
@@ -88,15 +116,34 @@ const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) 
     const tabId = sender.tab?.id;
     if (tabId == null) throw new Error('read must come from a tab');
     await setReadingTab(tabId, sender.tab?.url);
-    return toHost({ type: 'read', tabId, segments: msg.segments, startAt: msg.startAt, settings: await loadSettings() });
+    return toHost({ type: 'read', tabId, segments: msg.segments, startAt: msg.startAt, title: msg.title, settings: await loadSettings() });
   },
   // From popup / shortcuts: ask a tab to extract its text and start reading.
   async extract(msg) {
-    return sendToTab(msg.tabId ?? (await activeTabId()), { type: 'extract', mode: msg.mode });
+    const tabId: number = msg.tabId ?? (await activeTabId());
+    const tab = await chrome.tabs.get(tabId);
+    const cmd = { type: 'extract', mode: msg.mode };
+    if (isViewer(tab.url)) return chrome.runtime.sendMessage({ target: 'tab', tabId, payload: cmd });
+    if (tab.url && /\.pdf($|[?#])/i.test(tab.url) && (await looksLikePdf(tab.url))) {
+      await openPdf(tabId, tab.url);
+      return { ok: true, pdf: true };
+    }
+    try {
+      return await sendToTab(tabId, cmd);
+    } catch (e) {
+      // Chrome's built-in PDF viewer can't be scripted: reopen the PDF in ours.
+      if (tab.url && (await looksLikePdf(tab.url))) {
+        await openPdf(tabId, tab.url);
+        return { ok: true, pdf: true };
+      }
+      throw e;
+    }
   },
   async toTab(msg) {
-    if (msg.payload.type === 'ended' || msg.payload.type === 'stopped') await setReadingTab(null);
-    chrome.tabs.sendMessage(msg.tabId, msg.payload).catch(() => {});
+    if (msg.payload.type === 'ended' || msg.payload.type === 'stopped') {
+      if ((await readingTab())?.tabId === msg.tabId) await setReadingTab(null);
+    }
+    deliverToTab(msg.tabId, msg.payload);
   },
   // Player controls and diagnostics: pass through to the host.
   async host(msg) {
@@ -125,7 +172,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Settings changed in the popup or floating player: apply to the running session.
 chrome.storage.onChanged.addListener(async (changes, area) => {
-  if (area === 'local' && changes.settings) toHostIfRunning({ type: 'settings', settings: await loadSettings() });
+  if (area === 'sync' && changes.settings) toHostIfRunning({ type: 'settings', settings: await loadSettings() });
 });
 
 // Stop when the reading tab closes or navigates to another page.
@@ -152,14 +199,25 @@ chrome.commands.onCommand.addListener((command) => {
   if (command === 'prev-sentence') run(toHostIfRunning({ type: 'prev' }));
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: 'read-selection', title: 'Read selection aloud', contexts: ['selection'] });
     chrome.contextMenus.create({ id: 'read-page', title: 'Read this page aloud', contexts: ['page'] });
+    chrome.contextMenus.create({
+      id: 'read-pdf-link',
+      title: 'Read PDF aloud',
+      contexts: ['link'],
+      targetUrlPatterns: ['*://*/*.pdf', '*://*/*.pdf?*', '*://*/*.PDF', 'file:///*.pdf'],
+    });
   });
+  if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'read-pdf-link' && info.linkUrl) {
+    openPdf(undefined, info.linkUrl).catch(console.warn);
+    return;
+  }
   if (tab?.id == null) return;
   const mode = info.menuItemId === 'read-selection' ? 'selection' : 'page';
   handlers.extract({ mode, tabId: tab.id }, {}).catch(console.warn);

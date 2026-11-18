@@ -1,5 +1,5 @@
 // Dev tool: shows what the extension would read on real pages (first/last sentences, count).
-// Usage: node tools/try-sites.mjs <url> [url...]
+// Usage: node tools/try-sites.mjs <url> [url...]   (PDF URLs open in the extension's viewer)
 import puppeteer from 'puppeteer';
 import path from 'node:path';
 
@@ -13,13 +13,13 @@ try {
   await ext.evaluate(() => chrome.storage.local.set({ settings: { engine: 'wasm-q8', voice: 'af_heart', speed: 1 } }));
   for (const url of urls) {
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
-    const out = await page.evaluate(() => {
-      // Mirror of the content script's sentence list via a fresh extraction message is not
-      // reachable from the page world, so read the segments the SW forwards instead.
-      return document.title;
-    });
-    const tabId = await ext.evaluate(async (u) => (await chrome.tabs.query({}))?.find((t) => t.url?.startsWith(u.slice(0, 30)))?.id, url);
+    const isPdf = /\.pdf($|[?#])|arxiv\.org\/pdf\//i.test(url);
+    const target = isPdf ? `chrome-extension://${new URL(sw.url()).host}/pdf.html?file=${encodeURIComponent(url)}` : url;
+    await page.goto(target, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+    if (isPdf) await page.waitForFunction(() => document.querySelector('.page') && !document.getElementById('status').textContent, { timeout: 120000 });
+    // The segments are read from the 'read' message the service worker forwards to the host.
+    const out = await page.evaluate(() => document.title);
+    const tabId = await ext.evaluate(async (u, pdf) => (await chrome.tabs.query({}))?.find((t) => (pdf ? t.url?.includes('/pdf.html') : t.url?.startsWith(u.slice(0, 30))))?.id, target, isPdf);
     const segs = await ext.evaluate(
       (id) =>
         new Promise((resolve) => {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TTS Reader",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reads web pages aloud with natural voices that run locally (Kokoro). Read-along highlighting, background play.",
   "action": {
     "default_popup": "popup.html",
@@ -78,5 +78,5 @@
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-  "minimum_chrome_version": "116"
+  "minimum_chrome_version": "128"
 }

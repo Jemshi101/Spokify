@@ -1,13 +1,17 @@
 export type EngineId = 'webgpu-fp16' | 'webgpu-fp32' | 'wasm-q8';
-export type EngineChoice = 'auto' | EngineId;
+/** 'system' = the browser's built-in voices (lite mode, for machines without WebGPU). */
+export type EngineChoice = 'auto' | 'system' | EngineId;
 
 export interface Settings {
   engine: EngineChoice;
+  /** Kokoro voice id. */
   voice: string;
+  /** speechSynthesis voiceURI for lite mode ('' = browser default English voice). */
+  systemVoice: string;
   speed: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { engine: 'auto', voice: 'af_heart', speed: 1 };
+export const DEFAULT_SETTINGS: Settings = { engine: 'auto', voice: 'af_heart', systemVoice: '', speed: 1 };
 
 export const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 export const MIN_SPEED = 0.5;
@@ -62,14 +66,22 @@ export function splitSpeed(speed: number): { modelSpeed: number; rate: number } 
   return { modelSpeed, rate: speed / modelSpeed };
 }
 
+/** Settings live in storage.sync so they follow the user across browsers. */
 export async function loadSettings(): Promise<Settings> {
-  const { settings } = await chrome.storage.local.get('settings');
+  const { settings } = await chrome.storage.sync.get('settings');
   return { ...DEFAULT_SETTINGS, ...(settings as Partial<Settings> | undefined) };
 }
 
 export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {
   const next = { ...(await loadSettings()), ...patch };
   next.speed = clampSpeed(next.speed);
-  await chrome.storage.local.set({ settings: next });
+  await chrome.storage.sync.set({ settings: next });
   return next;
+}
+
+/** Calls back with fresh settings whenever they change anywhere. */
+export function onSettingsChanged(cb: (s: Settings) => void) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'sync' && changes.settings) cb({ ...DEFAULT_SETTINGS, ...(changes.settings.newValue as Partial<Settings>) });
+  });
 }

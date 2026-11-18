@@ -10,8 +10,12 @@ cpSync('static', 'dist', { recursive: true });
 for (const f of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']) {
   cpSync(`node_modules/@huggingface/transformers/dist/${f}`, `dist/ort/${f}`);
 }
+// pdf.js worker and data files for the PDF viewer.
+cpSync('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'dist/pdfjs/pdf.worker.mjs');
+for (const d of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) cpSync(`node_modules/pdfjs-dist/${d}`, `dist/pdfjs/${d}`, { recursive: true });
+cpSync('node_modules/pdfjs-dist/web/pdf_viewer.css', 'dist/pdf.css');
 
-const common = { bundle: true, platform: 'browser', target: 'chrome116', logLevel: 'info', legalComments: 'none' };
+const common = { bundle: true, platform: 'browser', target: 'chrome128', logLevel: 'info', legalComments: 'none' };
 const builds = [
   {
     ...common,
@@ -24,6 +28,8 @@ const builds = [
       worker: 'src/engine/worker.ts',
       popup: 'src/popup/popup.ts',
       diag: 'src/diag/diag.ts',
+      pdf: 'src/pdf/viewer.ts',
+      welcome: 'src/welcome/welcome.ts',
     },
   },
   { ...common, format: 'iife', outdir: 'dist', entryPoints: { content: 'src/content/index.ts' } },

@@ -28,8 +28,12 @@ const ARTICLE = `<!doctype html><html><head><title>Test article</title></head><b
 </body></html>`;
 const OTHER = '<!doctype html><title>Other</title><p>Another page.</p>';
 
+let pdfBytes = null;
 const server = http
-  .createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url === '/other' ? OTHER : ARTICLE))
+  .createServer((req, res) => {
+    if (req.url === '/doc.pdf') return res.writeHead(200, { 'content-type': 'application/pdf', 'access-control-allow-origin': '*' }).end(pdfBytes);
+    res.writeHead(200, { 'content-type': 'text/html' }).end(req.url === '/other' ? OTHER : ARTICLE);
+  })
   .listen(0);
 const base = `http://localhost:${server.address().port}`;
 
@@ -48,14 +52,27 @@ const browser = await puppeteer.launch({
 });
 
 try {
+  {
+    const p = await browser.newPage();
+    await p.setContent(ARTICLE.replace(/<header>[\s\S]*?<\/header>|<aside>[\s\S]*?<\/aside>|<footer>[\s\S]*?<\/footer>/g, ''));
+    pdfBytes = Buffer.from(await p.pdf({ format: 'A4' }));
+    await p.close();
+  }
   const sw = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('sw.js'));
   const extId = new URL(sw.url()).host;
   const ext = await browser.newPage();
   await ext.goto(`chrome-extension://${extId}/popup.html`);
   const call = (msg) => ext.evaluate((m) => chrome.runtime.sendMessage({ target: 'sw', ...m }), msg);
   const status = () => call({ type: 'host', payload: { type: 'status' } });
-  const setSettings = (s) => ext.evaluate((v) => chrome.storage.local.set({ settings: v }), s);
+  const setSettings = (s) => ext.evaluate((v) => chrome.storage.sync.set({ settings: { systemVoice: '', ...v } }), s);
+  const waitFor = async (fn, ms = 60000) => {
+    const end = Date.now() + ms;
+    let v;
+    while (!(v = await fn()) && Date.now() < end) await sleep(100);
+    return v;
+  };
 
+  await ext.evaluate(() => chrome.storage.local.remove('positions'));
   await setSettings({ engine, voice: 'af_heart', speed: 1.5 });
   const info = await call({ type: 'hostInfo' });
   check('audio host starts as offscreen document', info.host?.kind === 'offscreen', JSON.stringify(info));
@@ -146,6 +163,75 @@ try {
   await sleep(1500);
   const after = await status();
   check('stops when the reading tab navigates away', !after.active, JSON.stringify({ active: after.active }));
+
+  // --- resume where you left off
+  await page.goto(`${base}/article`);
+  await page.bringToFront();
+  await setSettings({ engine, voice: 'af_heart', speed: 2 });
+  await call({ type: 'extract', mode: 'page', tabId });
+  await waitFor(async () => (await state()).sid >= 3);
+  await call({ type: 'host', payload: { type: 'stop' } });
+  await sleep(500);
+  const resumed = await call({ type: 'extract', mode: 'page', tabId });
+  const firstSid = (await waitFor(async () => { const x = await state(); return x.sentence && x; }))?.sid;
+  check('resumes where reading stopped', resumed?.startAt >= 3 && firstSid >= 3, `startAt ${resumed?.startAt}, first sentence ${firstSid + 1}`);
+  await call({ type: 'host', payload: { type: 'stop' } });
+
+  // --- lite mode: system voices with live word events
+  await ext.evaluate(() => chrome.storage.local.remove('positions'));
+  await setSettings({ engine: 'system', voice: 'af_heart', speed: 1.5 });
+  const env = await call({ type: 'host', payload: { type: 'env' } });
+  if (!env.host?.systemVoices) {
+    console.log('⚠️  lite mode skipped: no system voices in this browser');
+  } else {
+    await page.goto(`${base}/article`);
+    await page.bringToFront();
+    await call({ type: 'extract', mode: 'page', tabId });
+    const seenWords = new Set();
+    let lite;
+    const endLite = Date.now() + 40000;
+    while (Date.now() < endLite) {
+      lite = await state();
+      if (lite.word) seenWords.add(`${lite.sid}:${lite.word}`);
+      if (lite.sid >= 2 && seenWords.size >= 15) break;
+      await sleep(30);
+    }
+    const st2 = await status();
+    check('lite mode reads with system voices', st2.engine === 'system' && lite?.sid >= 1, `engine ${st2.engine}, sentence ${lite?.sid + 1}`);
+    check('lite mode highlights words from boundary events', seenWords.size >= 10, `${seenWords.size} words`);
+    await call({ type: 'host', payload: { type: 'stop' } });
+  }
+  await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+
+  // --- PDF viewer (PDF printed by Chrome from the test article)
+  const pdfUrl = `${base}/doc.pdf`;
+  const pdfPage = await browser.newPage();
+  await pdfPage.goto(`chrome-extension://${extId}/pdf.html?file=${encodeURIComponent(pdfUrl)}&autoplay=1`);
+  const pdfState = () => pdfPage.evaluate(() => {
+    const d = document.documentElement.dataset.ttsReader;
+    const h = (n) => (CSS.highlights.get(n) ? [...CSS.highlights.get(n)][0].toString() : null);
+    return { ...(d ? JSON.parse(d) : {}), pages: document.querySelectorAll('.page').length, sentence: h('tts-sentence'), word: h('tts-word') };
+  });
+  const p1 = await waitFor(async () => { const x = await pdfState(); return x.sentence && x; }, 60000);
+  check('PDF viewer renders and starts reading', !!p1 && p1.pages >= 1, p1 ? `${p1.pages} page(s), "${p1.sentence?.slice(0, 40)}…"` : 'no sentence');
+  const pdfWords = new Set();
+  const endPdf = Date.now() + 20000;
+  while (Date.now() < endPdf && pdfWords.size < 15) {
+    const x = await pdfState();
+    if (x.word) pdfWords.add(`${x.sid}:${x.word}`);
+    await sleep(40);
+  }
+  const pdfSentences = p1?.total ?? 0;
+  check('PDF text joins lines into sentences', pdfSentences >= 8 && pdfSentences <= 14, `${pdfSentences} segments`);
+  check('PDF word highlighting advances', pdfWords.size >= 10, `${pdfWords.size} words`);
+  await call({ type: 'host', payload: { type: 'stop' } });
+
+  // --- welcome page
+  const welcome = await browser.newPage();
+  await welcome.goto(`chrome-extension://${extId}/welcome.html`);
+  const wText = await waitFor(() => welcome.$eval('#engineText', (e) => (e.textContent.includes('Checking') ? '' : e.textContent)), 10000);
+  const voiceCount = await welcome.$eval('#voice', (e) => e.options.length);
+  check('welcome page detects the engine and lists voices', !!wText && voiceCount > 5, `${voiceCount} voices`);
 
   const r = await call({ type: 'host', payload: { type: 'env' } });
   console.log('engine:', JSON.stringify(r.worker?.loaded), 'last session stats:', JSON.stringify(st.stats));

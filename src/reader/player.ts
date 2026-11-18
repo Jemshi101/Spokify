@@ -18,7 +18,9 @@ const svg = (p: string) => `<svg viewBox="0 0 24 24" width="18" height="18" fill
 
 export class Player {
   private host: HTMLElement | null = null;
-  private el!: { status: HTMLElement; toggle: HTMLButtonElement; speed: HTMLButtonElement; bar: HTMLElement };
+  private el!: { status: HTMLElement; toggle: HTMLButtonElement; speed: HTMLButtonElement; bar: HTMLElement; offer: HTMLButtonElement };
+  private offerAction: (() => void) | null = null;
+  private offerTimer = 0;
   private hideTimer = 0;
   private speed = 1;
 
@@ -38,14 +40,17 @@ export class Player {
         .toggle { background:#f4f4f6; color:#1d1d22; width:36px; height:36px; border-radius:50% } .toggle:hover { background:#fff }
         .speed { font-weight:600; padding:0 6px; font-variant-numeric:tabular-nums }
         .info { flex:1; min-width:0; margin-left:6px; display:flex; flex-direction:column; gap:4px }
+        .row { display:flex; align-items:center; gap:8px; min-width:0 }
         .status { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.85 }
+        .offer { height:auto; min-width:0; padding:1px 6px; border-radius:6px; background:#34343c; color:#ffd54f; font-weight:600; white-space:nowrap }
+        .offer[hidden] { display:none }
         .track { height:3px; background:#3a3a44; border-radius:2px; overflow:hidden } .bar { height:100%; width:0; background:#ffb300; transition:width .3s }
       </style>
       <div class="p" role="toolbar" aria-label="Read aloud">
         <button data-a="prev" title="Previous sentence (Alt+Shift+,)">${svg(ICONS.prev)}</button>
         <button data-a="toggle" class="toggle" title="Pause / resume (Alt+Shift+P)">${svg(ICONS.pause)}</button>
         <button data-a="next" title="Next sentence (Alt+Shift+.)">${svg(ICONS.next)}</button>
-        <div class="info"><span class="status"></span><div class="track"><div class="bar"></div></div></div>
+        <div class="info"><div class="row"><span class="status"></span><button class="offer" data-a="offer" hidden></button></div><div class="track"><div class="bar"></div></div></div>
         <button data-a="speed" class="speed" title="Speed"></button>
         <button data-a="stop" title="Stop">${svg(ICONS.stop)}</button>
       </div>`;
@@ -54,11 +59,16 @@ export class Player {
       toggle: root.querySelector('.toggle')!,
       speed: root.querySelector('.speed')!,
       bar: root.querySelector('.bar')!,
+      offer: root.querySelector('.offer')!,
     };
     root.addEventListener('click', (e) => {
       const a = (e.target as Element).closest('button')?.dataset.a;
       if (!a) return;
-      if (a === 'speed') {
+      if (a === 'offer') {
+        const fn = this.offerAction;
+        this.clearOffer();
+        fn?.();
+      } else if (a === 'speed') {
         const next = SPEED_STEPS.find((s) => s > this.speed + 0.01) ?? SPEED_STEPS[0];
         this.setSpeed(next);
         this.cb.onSpeed(next);
@@ -90,6 +100,21 @@ export class Player {
   progress(index: number, total: number) {
     this.show();
     this.el.bar.style.width = `${total ? ((index + 1) / total) * 100 : 0}%`;
+  }
+
+  /** Shows a temporary action next to the status, e.g. "Restart" after resuming mid-article. */
+  offer(label: string, action: () => void, ms = 10000) {
+    this.show();
+    this.offerAction = action;
+    this.el.offer.textContent = label;
+    this.el.offer.hidden = false;
+    clearTimeout(this.offerTimer);
+    this.offerTimer = window.setTimeout(() => this.clearOffer(), ms);
+  }
+
+  clearOffer() {
+    this.offerAction = null;
+    if (this.host) this.el.offer.hidden = true;
   }
 
   setPaused(paused: boolean) {
