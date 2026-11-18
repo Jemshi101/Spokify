@@ -1,0 +1,28 @@
+{
+  "name": "tts-reader",
+  "version": "0.1.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc",
+    "e2e": "node tests/e2e.mjs",
+    "icons": "node tools/icons.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Reads web pages aloud with natural local voices (Kokoro), read-along highlighting",
+  "dependencies": {
+    "kokoro-js": "1.2.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.7",
+    "esbuild": "^0.28.2",
+    "puppeteer": "^24.43.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "type": "module"
+}

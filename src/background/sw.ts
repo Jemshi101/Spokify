@@ -1,0 +1,166 @@
+// Service worker: starts the audio host, relays messages, owns menus, shortcuts and tab lifecycle.
+import { loadSettings } from '../shared/settings';
+import type { HostCommand } from '../shared/messages';
+
+const HOST_URL = 'host.html';
+let creating: Promise<unknown> | null = null;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function pingHost(): Promise<{ ok: boolean; kind: string } | null> {
+  try {
+    const r = await chrome.runtime.sendMessage({ target: 'host', type: 'ping' });
+    return r?.ok ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+async function createHost() {
+  if (chrome.offscreen?.createDocument) {
+    if (!(await chrome.offscreen.hasDocument())) {
+      await chrome.offscreen.createDocument({
+        url: HOST_URL,
+        reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK, chrome.offscreen.Reason.WORKERS],
+        justification: 'Generate speech with a local model and keep playing while the user browses.',
+      });
+    }
+  } else {
+    // Browsers without chrome.offscreen: host the engine in a pinned background tab.
+    const url = chrome.runtime.getURL(HOST_URL);
+    const tabs = await chrome.tabs.query({ url });
+    if (!tabs.length) await chrome.tabs.create({ url, pinned: true, active: false });
+  }
+  for (let i = 0; i < 100; i++) {
+    const r = await pingHost();
+    if (r) return r;
+    await sleep(100);
+  }
+  throw new Error('Audio host did not start');
+}
+
+async function ensureHost() {
+  const r = await pingHost();
+  if (r) return r;
+  creating ??= createHost().finally(() => (creating = null));
+  return creating;
+}
+
+async function toHost(cmd: HostCommand) {
+  await ensureHost();
+  return chrome.runtime.sendMessage({ target: 'host', ...cmd });
+}
+
+/** Sends to the host only if it is already running (never starts it). */
+async function toHostIfRunning(cmd: HostCommand) {
+  if (await pingHost()) return chrome.runtime.sendMessage({ target: 'host', ...cmd });
+}
+
+async function sendToTab(tabId: number, payload: unknown) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, payload);
+  } catch {
+    // Tab was open before the extension loaded: inject the content script, then retry.
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    return chrome.tabs.sendMessage(tabId, payload);
+  }
+}
+
+async function activeTabId() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab?.id == null) throw new Error('No active tab');
+  return tab.id;
+}
+
+const stripHash = (u?: string) => (u ?? '').split('#')[0];
+
+async function setReadingTab(tabId: number | null, url?: string) {
+  await chrome.storage.session.set({ reading: tabId == null ? null : { tabId, url: stripHash(url) } });
+}
+
+async function readingTab(): Promise<{ tabId: number; url: string } | null> {
+  return ((await chrome.storage.session.get('reading')).reading as { tabId: number; url: string } | null) ?? null;
+}
+
+const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) => Promise<unknown>> = {
+  // From the content script: start reading these segments.
+  async read(msg, sender) {
+    const tabId = sender.tab?.id;
+    if (tabId == null) throw new Error('read must come from a tab');
+    await setReadingTab(tabId, sender.tab?.url);
+    return toHost({ type: 'read', tabId, segments: msg.segments, startAt: msg.startAt, settings: await loadSettings() });
+  },
+  // From popup / shortcuts: ask a tab to extract its text and start reading.
+  async extract(msg) {
+    return sendToTab(msg.tabId ?? (await activeTabId()), { type: 'extract', mode: msg.mode });
+  },
+  async toTab(msg) {
+    if (msg.payload.type === 'ended' || msg.payload.type === 'stopped') await setReadingTab(null);
+    chrome.tabs.sendMessage(msg.tabId, msg.payload).catch(() => {});
+  },
+  // Player controls and diagnostics: pass through to the host.
+  async host(msg) {
+    const cmd = msg.payload as HostCommand;
+    if (cmd.type === 'speakSample' || cmd.type === 'warmup') (cmd as any).settings = await loadSettings();
+    if (cmd.type === 'status' || cmd.type === 'toggle' || cmd.type === 'next' || cmd.type === 'prev' || cmd.type === 'stop') {
+      return (await toHostIfRunning(cmd)) ?? { active: false };
+    }
+    return toHost(cmd);
+  },
+  async hostInfo() {
+    return { offscreenApi: !!chrome.offscreen?.createDocument, host: await ensureHost() };
+  },
+};
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.target !== 'sw') return;
+  const fn = handlers[msg.type];
+  if (!fn) return;
+  fn(msg, sender).then(
+    (r) => sendResponse(r ?? { ok: true }),
+    (e) => sendResponse({ error: String(e?.message ?? e) }),
+  );
+  return true;
+});
+
+// Settings changed in the popup or floating player: apply to the running session.
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  if (area === 'local' && changes.settings) toHostIfRunning({ type: 'settings', settings: await loadSettings() });
+});
+
+// Stop when the reading tab closes or navigates to another page.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  if ((await readingTab())?.tabId === tabId) {
+    await setReadingTab(null);
+    toHostIfRunning({ type: 'stop' });
+  }
+});
+chrome.tabs.onUpdated.addListener(async (tabId, info) => {
+  if (!info.url) return;
+  const r = await readingTab();
+  if (r?.tabId === tabId && stripHash(info.url) !== r.url) {
+    await setReadingTab(null);
+    toHostIfRunning({ type: 'stop' });
+  }
+});
+
+chrome.commands.onCommand.addListener((command) => {
+  const run = (p: Promise<unknown>) => p.catch((e) => console.warn(command, e));
+  if (command === 'read-page') run(handlers.extract({ mode: 'page' }, {}));
+  if (command === 'toggle-pause') run(toHostIfRunning({ type: 'toggle' }));
+  if (command === 'next-sentence') run(toHostIfRunning({ type: 'next' }));
+  if (command === 'prev-sentence') run(toHostIfRunning({ type: 'prev' }));
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: 'read-selection', title: 'Read selection aloud', contexts: ['selection'] });
+    chrome.contextMenus.create({ id: 'read-page', title: 'Read this page aloud', contexts: ['page'] });
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (tab?.id == null) return;
+  const mode = info.menuItemId === 'read-selection' ? 'selection' : 'page';
+  handlers.extract({ mode, tabId: tab.id }, {}).catch(console.warn);
+});

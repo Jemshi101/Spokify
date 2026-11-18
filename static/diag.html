@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TTS Reader Diagnostics</title>
+<style>
+  :root { --bg: #fafafa; --fg: #1d1d1f; --muted: #666; --card: #fff; --line: #e3e3e8; --ok: #1a7f37; --bad: #c62828; --accent: #2f6fed; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #151518; --fg: #ececf0; --muted: #9a9aa5; --card: #1f1f24; --line: #34343c; --ok: #4ac26b; --bad: #ff6b6b; } }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 24px 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; font-variant-numeric: tabular-nums; }
+  th { color: var(--muted); font-weight: 500; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+  button { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; font: inherit; margin: 0 6px 6px 0; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 70px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
+  #log { font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; color: var(--muted); max-height: 200px; overflow: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TTS Reader diagnostics</h1>
+  <p class="lead">Checks the browser APIs the extension depends on and benchmarks Kokoro on this machine. First run of each engine downloads the model (90–330 MB), later runs use the cache.</p>
+
+  <h2>1. Environment</h2>
+  <div class="card"><table id="env"><tr><td>Checking…</td></tr></table></div>
+
+  <h2>2. Benchmark</h2>
+  <div class="card">
+    <button class="primary" data-engine="webgpu-fp16">WebGPU · fp16</button>
+    <button data-engine="webgpu-fp32">WebGPU · fp32</button>
+    <button data-engine="wasm-q8">CPU / WASM · q8</button>
+    <table id="bench">
+      <tr><th>Engine</th><th>Load</th><th>Gen time</th><th>Audio</th><th>Speed vs realtime</th></tr>
+    </table>
+  </div>
+
+  <h2>3. Listen</h2>
+  <div class="card">
+    <textarea id="sample">Hi! This is a test of the Kokoro voice running entirely inside your browser. No servers, no API keys, and it should sound natural rather than robotic.</textarea>
+    <p><button id="speak" class="primary">Speak with current settings</button> <span id="speakInfo"></span></p>
+  </div>
+
+  <h2>4. Results</h2>
+  <div class="card">
+    <button id="copy">Copy results as JSON</button>
+    <div id="log"></div>
+  </div>
+</main>
+<script src="diag.js" type="module"></script>
+</body>
+</html>
