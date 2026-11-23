@@ -94,4 +94,18 @@ describe('mergeAbbreviationBreaks', () => {
   it('still splits normal sentences', () => {
     expect(split('It works. Then it stops.')).toEqual(['It works.', 'Then it stops.']);
   });
+  it('ends a sentence at a single letter before a sentence starter', () => {
+    expect(split('He fought in World War I. The war ended in 1918.')).toEqual(['He fought in World War I.', 'The war ended in 1918.']);
+    expect(split('We tried Plan B. It worked.')).toEqual(['We tried Plan B.', 'It worked.']);
+    expect(split('This is Henry V. He was king of England.')).toEqual(['This is Henry V.', 'He was king of England.']);
+  });
+  it('ends a sentence at a Roman numeral after a numbered word', () => {
+    expect(split('Read Chapter V. Germany appears later.')).toEqual(['Read Chapter V.', 'Germany appears later.']);
+    expect(split('After World War I. Germany lost land.')).toEqual(['After World War I.', 'Germany lost land.']);
+  });
+  it('keeps initials attached', () => {
+    expect(split('John F. Kennedy was president.')).toEqual(['John F. Kennedy was president.']);
+    expect(split('J. R. R. Tolkien wrote it. Then he rested.')).toEqual(['J. R. R. Tolkien wrote it.', 'Then he rested.']);
+    expect(split('U. S. Grant won.')).toEqual(['U. S. Grant won.']);
+  });
 });

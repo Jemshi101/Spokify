@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Sentences ending in a single capital letter end there: "World War I. The war ended" was read as one sentence. A letter followed by a period now ends the sentence when the next word usually starts one (The, It, He…), or when it's a Roman numeral after a numbered word (War, Chapter, Part, Act…). Initials stay joined ("John F. Kennedy", "J. R. R. Tolkien").
+
 ## 0.4.0
 
 - **Piper voices**: natural-sounding voices that run on the processor (~63 MB each, 10–15× faster than real time on an M1). 14 English voices (US and UK). **Auto** now uses Kokoro when the graphics keep up and Piper otherwise, so computers with weak graphics (e.g. Intel UHD) get natural voices instead of the robotic system ones. System voices are the last resort when natural voices fail entirely (e.g. offline before the download).
