@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .e2e-profile/
+.e2e-opera/
+.DS_Store

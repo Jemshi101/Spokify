@@ -28,11 +28,17 @@ async function init() {
     '<option value="">Default English voice</option>' + sys.map((v) => `<option value="${v.voiceURI}">${v.name} (${v.lang})</option>`).join('');
   $<HTMLSelectElement>('systemVoice').value = s.systemVoice;
   const gpu = await (navigator as any).gpu?.requestAdapter().catch(() => null);
+  let { gpuSlow } = (await chrome.storage.local.get('gpuSlow')) as { gpuSlow?: { realtime: number } | null };
   const showVoices = () => {
     const e = $<HTMLSelectElement>('engine').value;
-    const lite = e === 'system' || (e === 'auto' && !gpu);
+    const lite = e === 'system' || (e === 'auto' && (!gpu || !!gpuSlow));
     $('voice').hidden = lite;
     $('systemVoice').hidden = !lite;
+    const note = $('engineNote');
+    note.hidden = !(e === 'auto' && gpuSlow);
+    note.textContent = gpuSlow
+      ? `Using Lite voices: natural voices ran at ${gpuSlow.realtime}× real time on this computer's graphics, too slow to keep up. Pick a "Natural" engine to use them anyway.`
+      : '';
   };
   showVoices();
   $<HTMLSelectElement>('voice').value = s.voice;
@@ -41,9 +47,15 @@ async function init() {
   $('speedVal').textContent = `${s.speed}×`;
 
   $('voice').onchange = () => saveSettings({ voice: $<HTMLSelectElement>('voice').value });
-  $('engine').onchange = () => {
+  $('engine').onchange = async () => {
+    const engine = $<HTMLSelectElement>('engine').value as EngineChoice;
+    // Choosing Auto again re-tests the GPU on the next read.
+    if (engine === 'auto' && gpuSlow) {
+      gpuSlow = null;
+      await chrome.storage.local.remove('gpuSlow');
+    }
     showVoices();
-    saveSettings({ engine: $<HTMLSelectElement>('engine').value as EngineChoice });
+    saveSettings({ engine });
   };
   $('systemVoice').onchange = () => saveSettings({ systemVoice: $<HTMLSelectElement>('systemVoice').value });
   $('speed').oninput = () => {
@@ -58,10 +70,12 @@ async function init() {
       ? `Can't read this page: ${r.error}`
       : r?.pdf
         ? 'Opening the PDF reader…'
+        : r?.docs
+          ? 'Opening the Google Docs reader…'
         : r?.count
           ? r.startAt ? `Resuming at sentence ${r.startAt + 1} of ${r.count}…` : `Starting ${r.count} sentences…`
           : 'Nothing to read here';
-    if (r?.count || r?.pdf) setTimeout(() => window.close(), 700);
+    if (r?.count || r?.pdf || r?.docs) setTimeout(() => window.close(), 700);
   };
   $('readPage').onclick = read('page');
   $('readSel').onclick = read('selection');

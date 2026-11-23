@@ -185,6 +185,9 @@ export function createReader(opts: ReaderOptions) {
         player.status(msg.type === 'ended' ? 'Finished' : 'Stopped');
         player.hideSoon();
         return;
+      case 'notice':
+        player.status(msg.message);
+        return;
       case 'error':
         clear();
         player.status(`Error: ${msg.message}`);

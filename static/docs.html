@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google Doc · Spokify</title>
+<style>
+  :root { --bg:#e9e9ee; --bar:#ffffff; --fg:#1d1d1f; --muted:#666; --line:#dcdce2; --accent:#2f6fed; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151518; --bar:#1f1f24; --fg:#ececf0; --muted:#9a9aa5; --line:#34343c; } }
+  * { box-sizing: border-box; }
+  #doc, #doc * { box-sizing: content-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  #name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .badge { color: var(--muted); white-space: nowrap; font-size: 13px; }
+  .spacer { flex: 1; }
+  header a { color: var(--accent); text-decoration: none; white-space: nowrap; font-size: 13px; }
+  #read { padding: 7px 14px; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  #status { max-width: 816px; margin: 24px auto 0; padding: 0 16px; color: var(--muted); }
+  #status.error { color: #c62828; }
+  main { padding: 16px 16px 120px; }
+  /* The document keeps its own styles (scoped to #doc); this only frames it as a page. */
+  #doc { background: #fff; color: #000; max-width: 816px; margin: 0 auto; box-shadow: 0 1px 4px rgba(0,0,0,.18); overflow-wrap: anywhere; }
+  #doc:not([class*=" c"]) { padding: 72px; }
+  #doc img { max-width: 100%; height: auto; }
+  #doc a { color: #1155cc; }
+  [hidden] { display: none !important; }
+  @media (max-width: 600px) { #doc { padding: 24px !important; } header .badge { display: none; } }
+</style>
+</head>
+<body>
+  <header>
+    <span id="name">Google Doc</span>
+    <span class="badge">Google Docs · read-only copy</span>
+    <span class="spacer"></span>
+    <a id="open" target="_blank" rel="noopener">Open in Google Docs</a>
+    <button id="read">Read aloud</button>
+  </header>
+  <div id="status"></div>
+  <main><article id="doc" hidden></article></main>
+  <script src="docs.js" type="module"></script>
+</body>
+</html>

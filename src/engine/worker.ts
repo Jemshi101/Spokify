@@ -9,6 +9,10 @@ import { alignPhonemes, positionsToTimes } from './align';
 // Never load code from a CDN: ONNX Runtime's .mjs/.wasm ship inside the extension.
 env.wasmPaths = new URL('ort/', self.location.href).href;
 hfEnv.allowLocalModels = false;
+// CPU engine threads: ONNX Runtime picks the count (more was slower on an M1, whose extra cores are
+// efficiency cores). `?threads=N` on the worker URL overrides it for benchmarks.
+const threadParam = Number(new URL(self.location.href).searchParams.get('threads'));
+if (threadParam > 0) hfEnv.backends.onnx.wasm!.numThreads = threadParam;
 
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX-timestamped';
 
@@ -69,6 +73,19 @@ async function dropUnusedModels() {
   } catch {}
 }
 
+const CALIBRATION = 'This short sentence measures how quickly your computer can speak.';
+
+/** Frees the model (and its GPU memory), e.g. when the host switches to Lite voices. */
+async function unload() {
+  if (rawModel) {
+    try { await rawModel.dispose(); } catch {}
+  }
+  tts = null;
+  rawModel = null;
+  loaded = null;
+  return { ok: true };
+}
+
 async function load({ engine = 'auto' }: { engine?: EngineChoice }): Promise<LoadInfo> {
   const gpu = await hasWebGPU();
   // fp32 on WebGPU. fp16 is faster but its decoder output is garbled (robotic, unintelligible).
@@ -81,17 +98,24 @@ async function load({ engine = 'auto' }: { engine?: EngineChoice }): Promise<Loa
     const t0 = performance.now();
     let used = target;
     let fallbackReason: string | undefined;
+    let realtime: number | undefined;
     try {
       if (ENGINES[target].device === 'webgpu' && !gpu) throw new Error('WebGPU is not available');
       await loadEngine(target);
       await synth('Ready.', ['Ready'], 'af_heart', 1); // compiles GPU shaders; also verifies the engine works
+      if (ENGINES[target].device === 'webgpu') {
+        // How fast is this GPU? Weak integrated GPUs can be slower than real time (and long GPU work
+        // risks a driver reset on Windows); the host switches Auto to Lite voices then.
+        const r = await synth(CALIBRATION, [], 'af_heart', 1);
+        realtime = +(r.audioSec / (r.genMs / 1000)).toFixed(2);
+      }
     } catch (e) {
       if (ENGINES[target].device !== 'webgpu') throw e;
       fallbackReason = String((e as Error)?.message ?? e);
       used = 'wasm-q8';
       await loadEngine(used);
     }
-    loaded = { engine: used, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, fallbackReason };
+    loaded = { engine: used, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, fallbackReason, realtime: used === target ? realtime : undefined };
     dropUnusedModels();
     return loaded;
   })();
@@ -130,7 +154,7 @@ async function synth(text: string, words: string[], voice: string, speed: number
 
 async function generate(p: { text: string; words: string[]; voice: string; speed: number; engine: EngineChoice }) {
   const info = await load({ engine: p.engine });
-  return { ...(await synth(p.text, p.words, p.voice, p.speed)), engine: info.engine };
+  return { ...(await synth(p.text, p.words, p.voice, p.speed)), engine: info.engine, realtime: info.realtime };
 }
 
 const BENCH = [
@@ -169,14 +193,22 @@ async function envReport() {
   };
 }
 
-const handlers: Record<string, (p: any) => Promise<unknown>> = { load, generate, benchmark, envReport };
+const handlers: Record<string, (p: any) => Promise<unknown>> = { load, generate, benchmark, envReport, unload };
 
-self.onmessage = async ({ data }: MessageEvent<{ id: number; method: string; params?: unknown }>) => {
+// One request at a time: ONNX Runtime can't run one session concurrently, and overlapping GPU work
+// on a weak GPU makes driver resets more likely. envReport answers immediately (diagnostics).
+let queue: Promise<unknown> = Promise.resolve();
+
+self.onmessage = ({ data }: MessageEvent<{ id: number; method: string; params?: unknown }>) => {
   const { id, method, params } = data;
-  try {
-    const result = (await handlers[method](params ?? {})) as { samples?: Float32Array } | undefined;
-    post({ id, result }, result?.samples ? [result.samples.buffer] : []);
-  } catch (e) {
-    post({ id, error: String((e as Error)?.message ?? e) });
-  }
+  const run = async () => {
+    try {
+      const result = (await handlers[method](params ?? {})) as { samples?: Float32Array } | undefined;
+      post({ id, result }, result?.samples ? [result.samples.buffer] : []);
+    } catch (e) {
+      post({ id, error: String((e as Error)?.message ?? e) });
+    }
+  };
+  if (method === 'envReport') run();
+  else queue = queue.then(run);
 };

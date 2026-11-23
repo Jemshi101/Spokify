@@ -61,7 +61,13 @@ async function init() {
         clearInterval(poll);
         $('progress').style.width = '100%';
         $('get').textContent = 'Voice ready';
-        note('engineNote', loaded.fallbackReason ? `Ready (CPU fallback: ${loaded.fallbackReason})` : `Ready · ${loaded.engine}`, 'ok');
+        if (s.engine === 'auto' && loaded.realtime != null && loaded.realtime < 1.3) {
+          // The host switches Auto to Lite voices for this computer (see SLOW_REALTIME in host.ts).
+          note('engineNote', `Your graphics ran the natural voice at ${loaded.realtime}× real time, too slow to keep up, so Spokify will use your system's voices (lite mode). You can still pick a Natural engine in the toolbar popup.`, 'warn');
+          await fillVoices(true);
+        } else {
+          note('engineNote', loaded.fallbackReason ? `Ready (CPU fallback: ${loaded.fallbackReason})` : `Ready · ${loaded.engine}${loaded.realtime ? ` · ${loaded.realtime}× real time` : ''}`, 'ok');
+        }
       }
     }, 700);
   };

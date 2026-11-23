@@ -27,11 +27,29 @@ const ARTICLE = `<!doctype html><html><head><title>Test article</title></head><b
 </div>
 <footer><p>Copyright 2026 Example Media. All rights reserved. Privacy policy and terms of use apply.</p></footer>
 </body></html>`;
+
+// Shaped like Google Docs' HTML export: scoped c## classes, body class, a comment thread, a footnote.
+const GDOC = `<html><head><meta content="text/html; charset=UTF-8" http-equiv="content-type"><style type="text/css">@import url(https://themes.googleusercontent.com/fonts/css?kit=x);.c1{font-weight:700}.c2{background-color:#ffffff;max-width:468pt;padding:72pt 72pt 72pt 72pt}body{color:#000}p{margin:0;font-size:11pt}h1{font-size:20pt}</style></head><body class="c2 doc-content">
+<h1 id="h.a"><span>Quarterly plan</span></h1>
+<p><span>Our team will ship the reader to more people this quarter.</span><sup><a href="#cmnt1" id="cmnt_ref1">[a]</a></sup><span>&nbsp;The main goal is better voices on slow laptops.</span></p>
+<p><span class="c1">Second,</span><span>&nbsp;we will support documents written in Google Docs.</span><sup><a href="#ftnt1" id="ftnt_ref1">[1]</a></sup></p>
+<ul><li><span>Fix the remaining highlighting bugs.</span></li><li><span>Measure how long the first sentence takes.</span></li></ul>
+<p><span>Finally, we will ask readers what they think and adjust the plan.</span></p>
+<hr><div><p><a href="#ftnt_ref1" id="ftnt1">[1]</a><span>&nbsp;Docs draws text on a canvas, so we read the export.</span></p></div>
+<div><p><a href="#cmnt_ref1" id="cmnt1">[a]</a><span>Reviewer comment that must never be read aloud.</span></p></div>
+</body></html>`;
 const OTHER = '<!doctype html><title>Other</title><p>Another page.</p>';
 
 let pdfBytes = null;
+let longPdfBytes = null;
+// Two A6 pages: the long sentence starts at the bottom of page 1 and ends on page 2; footers carry page numbers.
+const CROSS = 'The reader keeps going across the page break because this sentence continues on the next page without stopping anywhere in between, and it should be heard as one.';
+const LONG_DOC = `<!doctype html><html><body style="margin:0;font:12pt serif;orphans:1;widows:1"><div style="height:106mm"></div>
+<p>${CROSS}</p><p>After that, a short closing sentence ends the document.</p></body></html>`;
 const server = http
   .createServer((req, res) => {
+    if (req.url === '/gdoc') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(GDOC);
+    if (req.url === '/long.pdf') return res.writeHead(200, { 'content-type': 'application/pdf', 'access-control-allow-origin': '*' }).end(longPdfBytes);
     if (req.url === '/doc.pdf') return res.writeHead(200, { 'content-type': 'application/pdf', 'access-control-allow-origin': '*' }).end(pdfBytes);
     res.writeHead(200, { 'content-type': 'text/html' }).end(req.url === '/other' ? OTHER : ARTICLE);
   })
@@ -57,6 +75,8 @@ try {
     const p = await browser.newPage();
     await p.setContent(ARTICLE.replace(/<header>[\s\S]*?<\/header>|<aside>[\s\S]*?<\/aside>|<footer>[\s\S]*?<\/footer>/g, ''));
     pdfBytes = Buffer.from(await p.pdf({ format: 'A4' }));
+    await p.setContent(LONG_DOC);
+    longPdfBytes = Buffer.from(await p.pdf({ format: 'A6', margin: { top: '10mm', bottom: '15mm', left: '10mm', right: '10mm' }, displayHeaderFooter: true, headerTemplate: '<span></span>', footerTemplate: '<div style="font-size:9pt;width:100%;text-align:center"><span class="pageNumber"></span></div>' }));
     await p.close();
   }
   const sw = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('sw.js'));
@@ -201,6 +221,20 @@ try {
     check('lite mode reads with system voices', st2.engine === 'system' && lite?.sid >= 1, `engine ${st2.engine}, sentence ${lite?.sid + 1}`);
     check('lite mode highlights words from boundary events', seenWords.size >= 10, `${seenWords.size} words`);
     await call({ type: 'host', payload: { type: 'stop' } });
+
+    // --- Auto on a GPU too slow for natural voices switches to Lite voices and remembers it.
+    // This GPU is fast, so the test raises the bar (testSlowRealtime) instead.
+    await ext.evaluate(() => chrome.storage.local.set({ testSlowRealtime: 100 }));
+    await ext.evaluate(() => chrome.storage.local.remove(['gpuSlow', 'positions']));
+    await setSettings({ engine: 'auto', voice: 'af_heart', speed: 1.5 });
+    await page.goto(`${base}/article`);
+    await page.bringToFront();
+    await call({ type: 'extract', mode: 'page', tabId });
+    const slowSt = await waitFor(async () => { const x = await status(); return x.engine === 'system' && x; }, 60000);
+    const flag = await ext.evaluate(async () => (await chrome.storage.local.get('gpuSlow')).gpuSlow);
+    check('Auto switches to Lite voices when the GPU is too slow', !!slowSt && !!flag?.realtime, `engine ${slowSt?.engine}, measured ${flag?.realtime}× real time`);
+    await call({ type: 'host', payload: { type: 'stop' } });
+    await ext.evaluate(() => chrome.storage.local.remove(['testSlowRealtime', 'gpuSlow']));
   }
   await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
 
@@ -225,6 +259,48 @@ try {
   const pdfSentences = p1?.total ?? 0;
   check('PDF text joins lines into sentences', pdfSentences >= 8 && pdfSentences <= 14, `${pdfSentences} segments`);
   check('PDF word highlighting advances', pdfWords.size >= 10, `${pdfWords.size} words`);
+  await call({ type: 'host', payload: { type: 'stop' } });
+
+  // --- PDF: a sentence across a page break is read as one; page-number footers are skipped
+  const segsOf = () =>
+    ext.evaluate(() => new Promise((ok) => chrome.runtime.onMessage.addListener(function l(m) {
+      if (m.target === 'host' && m.type === 'read') {
+        chrome.runtime.onMessage.removeListener(l);
+        ok(m.segments.map((s) => s.text));
+      }
+    })));
+  const longSegs = segsOf();
+  const longPage = await browser.newPage();
+  await longPage.goto(`chrome-extension://${extId}/pdf.html?file=${encodeURIComponent(`${base}/long.pdf`)}&autoplay=1`);
+  const ls = await Promise.race([longSegs, sleep(30000).then(() => [])]);
+  const pageCount = await longPage.evaluate(() => document.querySelectorAll('.page').length);
+  check('PDF sentence across a page break is read whole; page numbers skipped',
+    // The sentence (longer than one chunk) may be cut at its comma, but never at the page break.
+    pageCount >= 2 && ls.join(' ').includes(CROSS) && !ls.some((t) => /next page$/.test(t)) && !ls.some((t) => /\b\d+$/.test(t)),
+    `${pageCount} pages: ${JSON.stringify(ls.map((t) => t.slice(0, 32)))}`);
+  await call({ type: 'host', payload: { type: 'stop' } });
+  await longPage.close();
+
+  // --- Google Docs reader (local fixture in place of Google's export)
+  const gdocPage = await browser.newPage();
+  await gdocPage.goto(`chrome-extension://${extId}/docs.html?` + new URLSearchParams({ export: `${base}/gdoc`, title: 'Quarterly plan - Google Docs', autoplay: '1' }));
+  const gdocState = () => gdocPage.evaluate(() => {
+    const d = document.documentElement.dataset.ttsReader;
+    const h = (n) => (CSS.highlights.get(n) ? [...CSS.highlights.get(n)][0].toString() : null);
+    const doc = document.getElementById('doc');
+    return { ...(d ? JSON.parse(d) : {}), text: doc.textContent, cls: doc.className, title: document.title, sentence: h('tts-sentence'), word: h('tts-word'), padding: getComputedStyle(doc).paddingLeft };
+  });
+  const g1 = await waitFor(async () => { const x = await gdocState(); return x.sentence && x; }, 60000);
+  check('Google Docs reader renders the export and starts reading', !!g1 && g1.title === 'Quarterly plan' && g1.cls.includes('doc-content') && g1.padding === '96px', g1 ? `"${g1.sentence?.slice(0, 40)}…", padding ${g1.padding}` : 'no sentence');
+  check('Google Docs comments and footnote markers are not read', !!g1 && !/Reviewer comment|\[a\]|\[1\]/.test(g1.text) && g1.text.includes('Docs draws text on a canvas') && g1.text.includes('Our team will ship') && g1.total === 8, g1 ? `${g1.total} segments` : '');
+  const gdocWords = new Set();
+  const endGdoc = Date.now() + 20000;
+  while (Date.now() < endGdoc && gdocWords.size < 12) {
+    const x = await gdocState();
+    if (x.word) gdocWords.add(`${x.sid}:${x.word}`);
+    await sleep(40);
+  }
+  check('Google Docs word highlighting advances', gdocWords.size >= 10, `${gdocWords.size} words`);
   await call({ type: 'host', payload: { type: 'stop' } });
 
   // --- welcome page

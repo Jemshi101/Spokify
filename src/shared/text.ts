@@ -1,9 +1,10 @@
 // Pure text helpers shared by the content script and tests.
 
-export const MAX_CHUNK_CHARS = 300;
+export const MAX_CHUNK_CHARS = 160;
 
 /**
- * Splits a long sentence into chunks that stay under Kokoro's ~510 phoneme limit.
+ * Splits a long sentence into chunks: well under Kokoro's ~510 phoneme limit, and short enough that
+ * each GPU job stays short (long jobs on weak GPUs can trigger a driver reset on Windows).
  * Prefers clause punctuation, then spaces. Returns [start, end) offsets into `text`.
  */
 export function chunkSentence(text: string, max = MAX_CHUNK_CHARS): [number, number][] {

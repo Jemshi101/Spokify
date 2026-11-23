@@ -11,7 +11,7 @@ try {
   const ext = await browser.newPage();
   await ext.goto(`chrome-extension://${new URL(sw.url()).host}/popup.html`);
   // Silence the engine: we only want extraction.
-  await ext.evaluate(() => chrome.storage.local.set({ settings: { engine: 'wasm-q8', voice: 'af_heart', speed: 1 } }));
+  await ext.evaluate(() => chrome.storage.sync.set({ settings: { engine: 'system', voice: 'af_heart', systemVoice: '', speed: 1 } }));
   for (const url of urls) {
     const page = await browser.newPage();
     try {
@@ -37,6 +37,7 @@ try {
     ), 30000, 'extraction');
     await ext.evaluate(() => chrome.runtime.sendMessage({ target: 'sw', type: 'host', payload: { type: 'stop' } }));
     console.log(`\n== ${out} (${segs.length} segments)`);
+    if (process.env.GREP) for (const t of segs.filter((x) => new RegExp(process.env.GREP).test(x))) console.log("  ≈", t.slice(0, 160));
     for (const t of segs.slice(0, 4)) console.log('  ▸', t.slice(0, 110));
     console.log('  …');
     for (const t of segs.slice(-3)) console.log('  ▸', t.slice(0, 110));

@@ -1,9 +1,13 @@
 // Service worker: starts the audio host, relays messages, owns menus, shortcuts and tab lifecycle.
 import { loadSettings } from '../shared/settings';
+import { parseDocUrl } from '../docs/gdoc';
 import type { HostCommand } from '../shared/messages';
 
 const HOST_URL = 'host.html';
 const PDF_VIEWER = 'pdf.html';
+const DOCS_VIEWER = 'docs.html';
+/** How long a page may take to collect its text before Read reports it as unresponsive. */
+const EXTRACT_TIMEOUT_MS = 15000;
 let creating: Promise<unknown> | null = null;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -57,6 +61,13 @@ async function toHostIfRunning(cmd: HostCommand) {
   if (await pingHost()) return chrome.runtime.sendMessage({ target: 'host', ...cmd });
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(message)), ms)))]).finally(() =>
+    clearTimeout(timer),
+  );
+}
+
 async function sendToTab(tabId: number, payload: unknown) {
   try {
     return await chrome.tabs.sendMessage(tabId, payload);
@@ -82,7 +93,13 @@ function deliverToTab(tabId: number, payload: unknown) {
 }
 
 function isViewer(url?: string) {
-  return !!url?.startsWith(chrome.runtime.getURL(PDF_VIEWER));
+  return !!url && [PDF_VIEWER, DOCS_VIEWER].some((v) => url.startsWith(chrome.runtime.getURL(v)));
+}
+
+/** Google Docs draws on a canvas: read its export in our reader, in a new tab next to the editor. */
+async function openDoc(tab: chrome.tabs.Tab) {
+  const p = new URLSearchParams({ doc: tab.url!, title: tab.title ?? '', autoplay: '1' });
+  await chrome.tabs.create({ url: `${chrome.runtime.getURL(DOCS_VIEWER)}?${p}`, index: tab.index + 1, openerTabId: tab.id });
 }
 
 async function looksLikePdf(url: string): Promise<boolean> {
@@ -124,12 +141,16 @@ const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) 
     const tab = await chrome.tabs.get(tabId);
     const cmd = { type: 'extract', mode: msg.mode };
     if (isViewer(tab.url)) return chrome.runtime.sendMessage({ target: 'tab', tabId, payload: cmd });
+    if (parseDocUrl(tab.url)) {
+      await openDoc(tab);
+      return { ok: true, docs: true };
+    }
     if (tab.url && /\.pdf($|[?#])/i.test(tab.url) && (await looksLikePdf(tab.url))) {
       await openPdf(tabId, tab.url);
       return { ok: true, pdf: true };
     }
     try {
-      return await sendToTab(tabId, cmd);
+      return await withTimeout(sendToTab(tabId, cmd), EXTRACT_TIMEOUT_MS, "the page didn't respond. Reload it and try again.");
     } catch (e) {
       // Chrome's built-in PDF viewer can't be scripted: reopen the PDF in ours.
       if (tab.url && (await looksLikePdf(tab.url))) {
@@ -154,6 +175,14 @@ const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) 
     }
     return toHost(cmd);
   },
+  // The audio host can't use chrome.storage (offscreen document): it reads and saves the
+  // per-computer "GPU too slow" flag through these.
+  async machineState() {
+    return chrome.storage.local.get(['gpuSlow', 'testSlowRealtime']);
+  },
+  async saveMachine(msg) {
+    await chrome.storage.local.set({ gpuSlow: msg.gpuSlow });
+  },
   async hostInfo() {
     return { offscreenApi: !!chrome.offscreen?.createDocument, host: await ensureHost() };
   },
@@ -173,6 +202,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Settings changed in the popup or floating player: apply to the running session.
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area === 'sync' && changes.settings) toHostIfRunning({ type: 'settings', settings: await loadSettings() });
+  if (area === 'local' && (changes.gpuSlow || changes.testSlowRealtime)) {
+    const { gpuSlow, testSlowRealtime } = await chrome.storage.local.get(['gpuSlow', 'testSlowRealtime']);
+    toHostIfRunning({ type: 'machine', gpuSlow: gpuSlow as { realtime: number; at: number } | null, testSlowRealtime: testSlowRealtime as number | undefined });
+  }
 });
 
 // Stop when the reading tab closes or navigates to another page.

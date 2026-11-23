@@ -11,6 +11,21 @@ import { floatWav } from './wav';
 import { pickSystemVoice, systemVoices } from './voices';
 
 const LOOKAHEAD = 3;
+/** Below this many seconds of audio per second of work, Auto uses Lite voices instead of the GPU. */
+const SLOW_REALTIME = 1.3;
+
+/**
+ * Set when Auto found the GPU too slow; cleared by choosing Auto again in the popup. Offscreen
+ * documents can't use chrome.storage, so the service worker stores it and sends updates ('machine').
+ * `slowLimit` lets tests raise the bar on fast machines.
+ */
+let gpuSlow: { realtime: number; at: number } | null = null;
+let slowLimit = SLOW_REALTIME;
+function applyMachine(m: { gpuSlow?: typeof gpuSlow; testSlowRealtime?: number }) {
+  gpuSlow = m.gpuSlow ?? null;
+  slowLimit = typeof m.testSlowRealtime === 'number' ? m.testSlowRealtime : SLOW_REALTIME;
+}
+const gpuSlowLoaded = chrome.runtime.sendMessage({ target: 'sw', type: 'machineState' }).then(applyMachine, () => {});
 
 // ---------- worker RPC ----------
 
@@ -58,7 +73,10 @@ function hasWebGPU(): Promise<boolean> {
 
 async function resolveKind(settings: Settings): Promise<'kokoro' | 'system'> {
   if (settings.engine === 'system') return 'system';
-  if (settings.engine === 'auto') return (await hasWebGPU()) ? 'kokoro' : 'system';
+  if (settings.engine === 'auto') {
+    await gpuSlowLoaded;
+    return (await hasWebGPU()) && !gpuSlow ? 'kokoro' : 'system';
+  }
   return 'kokoro';
 }
 
@@ -191,6 +209,7 @@ async function pump(s: Session) {
       });
       if (session !== s) return;
       s.engine = r.engine;
+      if (await tooSlow(s.settings, r.realtime)) return void switchToLite(s, r.realtime);
       if (epoch !== s.epoch || i < s.idx) continue;
       s.clips.set(i, { url: URL.createObjectURL(floatWav(r.samples, r.sampleRate)), audioSec: r.audioSec, wordTimes: r.wordTimes, exact: r.exact, modelSpeed });
       s.stats.generated++;
@@ -207,6 +226,24 @@ async function pump(s: Session) {
   } finally {
     s.pumping = false;
   }
+}
+
+/** True (and remembered, and the GPU model freed) when Auto's GPU measured too slow for natural voices. */
+async function tooSlow(settings: Settings, realtime: number | undefined): Promise<boolean> {
+  await gpuSlowLoaded;
+  if (settings.engine !== 'auto' || realtime == null || realtime >= slowLimit) return false;
+  gpuSlow = { realtime, at: Date.now() };
+  await chrome.runtime.sendMessage({ target: 'sw', type: 'saveMachine', gpuSlow }).catch(() => {});
+  rpc('unload').catch(() => {});
+  return true;
+}
+
+/** Auto found the GPU too slow for natural voices: continue this sentence with Lite voices. */
+async function switchToLite(s: Session, realtime: number) {
+  if (session !== s) return;
+  const { tabId, segments, idx, title, settings } = s;
+  await read({ tabId, segments, settings, startAt: idx, title }, true);
+  if (session) emit(session, { type: 'notice', message: `Natural voice too slow here (${realtime}× real time). Using Lite voices.` });
 }
 
 function playClip(s: Session) {
@@ -436,7 +473,7 @@ if (navigator.mediaSession) {
 
 // ---------- diagnostics / samples ----------
 
-async function speakSample({ text, settings }: { text: string; settings: Settings }) {
+async function speakSample({ text, settings }: { text: string; settings: Settings }): Promise<Record<string, unknown>> {
   stop();
   if ((await resolveKind(settings)) === 'system') {
     const u = new SpeechSynthesisUtterance(text);
@@ -449,6 +486,7 @@ async function speakSample({ text, settings }: { text: string; settings: Setting
   }
   const { modelSpeed, rate } = splitSpeed(settings.speed);
   const r = await rpc('generate', { text, words: [], voice: settings.voice, speed: modelSpeed, engine: settings.engine });
+  if (await tooSlow(settings, r.realtime)) return { ...(await speakSample({ text, settings })), slow: gpuSlow };
   const audio = new Audio(URL.createObjectURL(floatWav(r.samples, r.sampleRate)));
   audio.playbackRate = rate;
   await audio.play();
@@ -457,8 +495,11 @@ async function speakSample({ text, settings }: { text: string; settings: Setting
 
 const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   ping: () => ({ ok: true, kind: chrome.tabs ? 'tab' : 'offscreen' }),
+  machine: (m) => applyMachine(m),
   warmup: async (m) => {
-    if ((await resolveKind(m.settings)) === 'kokoro') rpc('load', { engine: m.settings.engine }).catch(() => {});
+    if ((await resolveKind(m.settings)) === 'kokoro') {
+      rpc('load', { engine: m.settings.engine }).then((info) => tooSlow(m.settings, info?.realtime), () => {});
+    }
     return { ok: true };
   },
   read: (m) => (read(m), { ok: true }),
@@ -472,7 +513,7 @@ const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   stop,
   status,
   env: async () => ({
-    host: { crossOriginIsolated: self.crossOriginIsolated, webgpu: await hasWebGPU(), systemVoices: (await systemVoices()).length },
+    host: { crossOriginIsolated: self.crossOriginIsolated, webgpu: await hasWebGPU(), systemVoices: (await systemVoices()).length, gpuSlow },
     worker: await rpc('envReport'),
   }),
   benchmark: (m) => rpc('benchmark', { engine: m.engine }),

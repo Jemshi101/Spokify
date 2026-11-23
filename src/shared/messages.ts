@@ -16,11 +16,13 @@ export type TabEvent =
   | { type: 'loading'; percent: number | null }
   | { type: 'ended' }
   | { type: 'stopped' }
+  | { type: 'notice'; message: string }
   | { type: 'error'; message: string };
 
 /** Commands the host understands. */
 export type HostCommand =
   | { type: 'ping' }
+  | { type: 'machine'; gpuSlow?: { realtime: number; at: number } | null; testSlowRealtime?: number }
   | { type: 'warmup'; settings: Settings }
   | { type: 'read'; tabId: number; segments: SpeechSegment[]; settings: Settings; startAt?: number; title?: string }
   | { type: 'settings'; settings: Settings }
@@ -62,6 +64,8 @@ export interface LoadInfo {
   loadMs: number;
   cached: boolean;
   fallbackReason?: string;
+  /** Audio seconds generated per second on a reference sentence (WebGPU only). */
+  realtime?: number;
 }
 
 /** Host/UI broadcast (popup, diagnostics page). */

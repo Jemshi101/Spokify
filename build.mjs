@@ -30,6 +30,7 @@ const builds = [
       diag: 'src/diag/diag.ts',
       pdf: 'src/pdf/viewer.ts',
       welcome: 'src/welcome/welcome.ts',
+      docs: 'src/docs/viewer.ts',
     },
   },
   { ...common, format: 'iife', outdir: 'dist', entryPoints: { content: 'src/content/index.ts' } },

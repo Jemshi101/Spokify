@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Google Docs: press Read on a Docs tab. The document opens in a Spokify reader tab next to it (Docs draws its editor on a canvas, which extensions can't read), with its own formatting, highlighting, the player and resume. Comments and footnote markers aren't read. Clear messages when you're signed out, can't open the document, or the owner turned off downloading.
+- Weak graphics (e.g. Intel UHD integrated GPUs): Auto now times the GPU when the voice loads. If it can't keep up (below 1.3× real time) Spokify frees the GPU model and uses Lite voices, and the popup explains why. Pick a Natural engine to force it; choose Auto again to re-test.
+- Lighter GPU work: text is spoken in shorter pieces (160 characters, split at commas), and the engine runs one request at a time. Long GPU jobs on weak GPUs could make Windows reset the graphics driver and close other apps.
+- PDFs: sentences that continue on the next page are read as one sentence; page numbers and running headers/footers are skipped.
+- Read no longer waits forever on a page that doesn't respond: it reports it after 15 seconds.
+
 ## 0.2.1
 
 - Fixed: the natural voice sounded robotic, sharp and unintelligible. The default engine (WebGPU fp16) produced garbled audio in every browser; the default is now WebGPU fp32 (~330 MB download). Saved fp16 choices switch to Auto, and the old fp16 model is removed from the cache.
