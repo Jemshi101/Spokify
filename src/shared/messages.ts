@@ -47,6 +47,8 @@ export interface HostStatus {
   sid: number | null;
   total: number;
   engine: EngineId | 'system' | null;
+  /** The voice actually speaking (Lite: the system voice's name). */
+  voice: string | null;
   stats: ReadingStats | null;
 }
 

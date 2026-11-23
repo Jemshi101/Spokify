@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Lite mode: the chosen system voice is used. On Windows the voice list can load late, especially in the hidden audio page, and Spokify silently fell back to the default voice (Microsoft David). It now waits up to 5 seconds for the list and matches voices by name as well as id.
+- The popup shows the voice actually speaking ("Lite · Microsoft Zira"), and Diagnostics lists the voices the audio page can use.
+- Microsoft's "Online (Natural)" voices (Aria, Jenny, Guy… available in Microsoft Edge) are listed first and preferred by default; local voices next, then network voices.
+
 ## 0.3.0
 
 - Google Docs: press Read on a Docs tab. The document opens in a Spokify reader tab next to it (Docs draws its editor on a canvas, which extensions can't read), with its own formatting, highlighting, the player and resume. Comments and footnote markers aren't read. Clear messages when you're signed out, can't open the document, or the owner turned off downloading.

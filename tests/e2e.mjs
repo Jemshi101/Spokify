@@ -222,6 +222,19 @@ try {
     check('lite mode highlights words from boundary events', seenWords.size >= 10, `${seenWords.size} words`);
     await call({ type: 'host', payload: { type: 'stop' } });
 
+    // --- the chosen Lite voice is the one that speaks (not the system default)
+    const local = env.host.voices.filter((v) => / \| en[-_]/i.test(v) && !/online|default/.test(v)).map((v) => v.split(' | ')[0]);
+    const wanted = local[Math.min(3, local.length - 1)];
+    if (wanted) {
+      await setSettings({ engine: 'system', voice: 'af_heart', speed: 1.5, systemVoice: wanted });
+      await page.goto(`${base}/article`);
+      await page.bringToFront();
+      await call({ type: 'extract', mode: 'page', tabId });
+      const vs = await waitFor(async () => { const x = await status(); return x.voice && x; }, 20000);
+      check('lite mode uses the chosen system voice', vs?.voice === wanted, `chose "${wanted}", speaking "${vs?.voice}"`);
+      await call({ type: 'host', payload: { type: 'stop' } });
+    }
+
     // --- Auto on a GPU too slow for natural voices switches to Lite voices and remembers it.
     // This GPU is fast, so the test raises the bar (testSlowRealtime) instead.
     await ext.evaluate(() => chrome.storage.local.set({ testSlowRealtime: 100 }));

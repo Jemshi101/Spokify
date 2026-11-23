@@ -1,34 +1,55 @@
-// speechSynthesis voice helpers (lite mode). Used by the audio host and the popup.
+// speechSynthesis voice helpers (lite mode). Used by the audio host, the popup and the welcome page.
 
-/** getVoices() is empty until the browser has loaded them; wait briefly for voiceschanged. */
-export function systemVoices(timeoutMs = 1500): Promise<SpeechSynthesisVoice[]> {
-  const now = speechSynthesis.getVoices();
-  if (now.length) return Promise.resolve(now);
-  return new Promise((resolve) => {
-    const done = () => resolve(speechSynthesis.getVoices());
-    speechSynthesis.addEventListener('voiceschanged', done, { once: true });
-    setTimeout(done, timeoutMs);
-  });
+let cached: SpeechSynthesisVoice[] = [];
+if (typeof speechSynthesis !== 'undefined') {
+  speechSynthesis.addEventListener('voiceschanged', () => (cached = speechSynthesis.getVoices()));
 }
 
 /**
- * The chosen voice, or the best English default. Local voices are preferred because
- * network voices (e.g. "Google US English") don't send word boundary events.
+ * getVoices() is empty until the browser has loaded them, which can take seconds on Windows
+ * (and longer in a hidden offscreen page). Waits for voiceschanged, polling as a fallback.
  */
-export async function pickSystemVoice(uri: string): Promise<SpeechSynthesisVoice | null> {
+export async function systemVoices(timeoutMs = 5000): Promise<SpeechSynthesisVoice[]> {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const now = speechSynthesis.getVoices();
+    if (now.length) return (cached = now);
+    if (cached.length) return cached;
+    if (Date.now() > end) return [];
+    await new Promise<void>((r) => {
+      const t = setTimeout(r, 250);
+      speechSynthesis.addEventListener('voiceschanged', () => (clearTimeout(t), r()), { once: true });
+    });
+  }
+}
+
+/** Microsoft's online neural voices (Edge only: "Microsoft Aria Online (Natural) - English (United States)"). */
+export const isNatural = (v: SpeechSynthesisVoice) => /\bnatural\b/i.test(v.name);
+
+/**
+ * The chosen voice (by id, then by name), or the best English default: natural voices first, then
+ * local voices (network voices like "Google US English" don't always send word boundary events).
+ */
+export async function pickSystemVoice(chosen: string): Promise<SpeechSynthesisVoice | null> {
   const voices = await systemVoices();
+  const en = (v: SpeechSynthesisVoice) => v.lang.toLowerCase().startsWith('en');
   return (
-    voices.find((v) => v.voiceURI === uri) ??
-    voices.find((v) => v.localService && v.default && v.lang.startsWith('en')) ??
+    (chosen ? (voices.find((v) => v.voiceURI === chosen) ?? voices.find((v) => v.name === chosen)) : undefined) ??
+    voices.find((v) => isNatural(v) && v.lang === 'en-US') ??
+    voices.find((v) => v.localService && v.default && en(v)) ??
     voices.find((v) => v.localService && v.lang === 'en-US') ??
-    voices.find((v) => v.localService && v.lang.startsWith('en')) ??
-    voices.find((v) => v.lang.startsWith('en')) ??
+    voices.find((v) => v.localService && en(v)) ??
+    voices.find(en) ??
     null
   );
 }
 
-/** English local voices first, for the voice picker. */
+/** For the voice pickers: English first; within it natural, then local, then network voices. */
 export async function sortedSystemVoices(): Promise<SpeechSynthesisVoice[]> {
-  const rank = (v: SpeechSynthesisVoice) => (v.lang.startsWith('en') ? 0 : 2) + (v.localService ? 0 : 1);
+  const rank = (v: SpeechSynthesisVoice) => (v.lang.toLowerCase().startsWith('en') ? 0 : 4) + (isNatural(v) ? 0 : v.localService ? 1 : 2);
   return [...(await systemVoices())].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
+
+/** Short label for a voice picker. */
+export const voiceLabel = (v: SpeechSynthesisVoice) =>
+  `${v.name.replace(/^Microsoft\s+/, '').replace(/\s+-\s+.*$/, '')} (${v.lang})${isNatural(v) ? ' · natural' : v.localService ? '' : ' · online'}`;

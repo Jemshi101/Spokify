@@ -1,5 +1,5 @@
 import { VOICES, loadSettings, saveSettings } from '../shared/settings';
-import { sortedSystemVoices } from '../host/voices';
+import { sortedSystemVoices, voiceLabel } from '../host/voices';
 import type { UiEvent } from '../shared/messages';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -24,7 +24,7 @@ async function fillVoices(lite: boolean) {
   const select = $<HTMLSelectElement>('voice');
   if (lite) {
     const voices = await sortedSystemVoices();
-    select.innerHTML = voices.map((v) => `<option value="${v.voiceURI}">${v.name} (${v.lang})</option>`).join('');
+    select.innerHTML = '<option value="">Best available English voice</option>' + voices.map((v) => `<option value="${v.voiceURI}">${voiceLabel(v)}</option>`).join('');
     if (s.systemVoice) select.value = s.systemVoice;
     select.onchange = () => saveSettings({ systemVoice: select.value });
   } else {

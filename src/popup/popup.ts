@@ -1,5 +1,5 @@
 import { ENGINES, VOICES, loadSettings, saveSettings, type EngineChoice } from '../shared/settings';
-import { sortedSystemVoices } from '../host/voices';
+import { sortedSystemVoices, voiceLabel } from '../host/voices';
 import type { HostStatus, UiEvent } from '../shared/messages';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -12,7 +12,8 @@ function renderStatus(s: HostStatus | undefined) {
   $('toggle').textContent = s?.paused ? 'Resume' : 'Pause';
   if (active && s) {
     const rt = s.stats?.genMs ? ` · ${(s.stats.audioSec / (s.stats.genMs / 1000)).toFixed(1)}× realtime` : '';
-    $('msg').textContent = `Reading ${(s.sid ?? 0) + 1} of ${s.total}${s.engine ? ` · ${s.engine}` : ''}${rt}`;
+    const engine = s.engine === 'system' ? `Lite · ${s.voice ?? 'system voice'}` : s.engine;
+    $('msg').textContent = `Reading ${(s.sid ?? 0) + 1} of ${s.total}${engine ? ` · ${engine}` : ''}${rt}`;
   }
 }
 
@@ -25,7 +26,7 @@ async function init() {
     '<option value="system">Lite · system voices</option>';
   const sys = await sortedSystemVoices();
   $<HTMLSelectElement>('systemVoice').innerHTML =
-    '<option value="">Default English voice</option>' + sys.map((v) => `<option value="${v.voiceURI}">${v.name} (${v.lang})</option>`).join('');
+    '<option value="">Best available English voice</option>' + sys.map((v) => `<option value="${v.voiceURI}">${voiceLabel(v)}</option>`).join('');
   $<HTMLSelectElement>('systemVoice').value = s.systemVoice;
   const gpu = await (navigator as any).gpu?.requestAdapter().catch(() => null);
   let { gpuSlow } = (await chrome.storage.local.get('gpuSlow')) as { gpuSlow?: { realtime: number } | null };

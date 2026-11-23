@@ -92,6 +92,8 @@ interface Clip {
 
 interface Session {
   kind: 'kokoro' | 'system';
+  /** Lite mode: name of the system voice in use. */
+  voiceName?: string;
   tabId: number;
   title: string;
   segments: SpeechSegment[];
@@ -128,6 +130,7 @@ function status(): HostStatus {
     sid: s?.idx ?? null,
     total: s?.segments.length ?? 0,
     engine: s?.engine ?? null,
+    voice: s?.kind === 'system' ? (s.voiceName ?? null) : (s?.settings.voice ?? null),
     stats: s?.stats ?? null,
   };
 }
@@ -308,6 +311,7 @@ async function speakSystem(s: Session, fromWord: number) {
   const u = new SpeechSynthesisUtterance(seg.text.slice(offset));
   const voice = await pickSystemVoice(s.settings.systemVoice);
   if (session !== s) return;
+  s.voiceName = voice?.name ?? 'browser default';
   if (voice) {
     u.voice = voice;
     u.lang = voice.lang;
@@ -513,7 +517,14 @@ const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   stop,
   status,
   env: async () => ({
-    host: { crossOriginIsolated: self.crossOriginIsolated, webgpu: await hasWebGPU(), systemVoices: (await systemVoices()).length, gpuSlow },
+    host: {
+      crossOriginIsolated: self.crossOriginIsolated,
+      webgpu: await hasWebGPU(),
+      systemVoices: (await systemVoices()).length,
+      // What Lite mode can use here (the hidden audio page can see a different list than the popup).
+      voices: (await systemVoices()).map((v) => `${v.name} | ${v.lang}${v.localService ? '' : ' | online'}${v.default ? ' | default' : ''}`),
+      gpuSlow,
+    },
     worker: await rpc('envReport'),
   }),
   benchmark: (m) => rpc('benchmark', { engine: m.engine }),
