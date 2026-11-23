@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Player: a **jump to highlight** button (amber target) appears while the sentence being read is off-screen; it scrolls back to it and turns auto-scroll back on.
+- Player: a **voice** button opens the voice list. It shows the natural voices, or the system voices when Lite mode is speaking. The new voice takes over from the next sentence.
+
 ## 0.3.1
 
 - Lite mode: the chosen system voice is used. On Windows the voice list can load late, especially in the hidden audio page, and Spokify silently fell back to the default voice (Microsoft David). It now waits up to 5 seconds for the list and matches voices by name as well as id.

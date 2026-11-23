@@ -177,6 +177,54 @@ try {
   console.log('content stats:', stats);
   check('word highlighting advances through the text', words.size >= 50, `${words.size} distinct word highlights`);
 
+  // --- player: jump back to the highlight, and change the voice (the player is a closed shadow root:
+  // DevTools' DOM domain can see inside it)
+  {
+    await page.bringToFront();
+    const cdp = await page.createCDPSession();
+    const inPlayer = async (selector) => {
+      const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+      const shadows = [];
+      const walk = (n) => { for (const s of n.shadowRoots ?? []) shadows.push(s); for (const c of n.children ?? []) walk(c); };
+      walk(root);
+      for (const s of shadows) {
+        const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: s.nodeId, selector }).catch(() => ({ nodeId: 0 }));
+        if (nodeId) return nodeId;
+      }
+      return 0;
+    };
+    const clickInPlayer = async (selector) => {
+      const nodeId = await inPlayer(selector);
+      const box = nodeId && (await cdp.send('DOM.getBoxModel', { nodeId }).catch(() => null));
+      if (!box) return false;
+      const q = box.model.content;
+      await page.mouse.click((q[0] + q[4]) / 2, (q[1] + q[5]) / 2);
+      return true;
+    };
+    await ext.evaluate(() => chrome.storage.local.remove('positions'));
+    await setSettings({ engine, voice: 'af_heart', speed: 1 });
+    await page.goto(`${base}/article`);
+    await page.evaluate(() => (document.body.style.paddingBottom = '4000px'));
+    await call({ type: 'extract', mode: 'page', tabId });
+    await waitFor(async () => (await state()).sentence);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    const shown = await waitFor(() => page.evaluate(() => document.documentElement.dataset.ttsLocate === 'true'), 5000);
+    const clicked = shown && (await clickInPlayer('button[data-a="locate"]'));
+    const back = clicked && (await waitFor(() => page.evaluate(() => document.documentElement.dataset.ttsLocate === 'false' && scrollY < 1500), 5000));
+    check('player jumps back to the highlight', !!shown && !!back, `button shown ${!!shown}, clicked ${!!clicked}, back in view ${!!back}`);
+
+    const opened = await clickInPlayer('button[data-a="voice"]');
+    const select = opened && (await inPlayer('.menu:not([hidden]) select'));
+    if (select) {
+      await cdp.send('DOM.focus', { nodeId: select });
+      await page.keyboard.press('ArrowDown');
+    }
+    const voice = await waitFor(async () => { const v = (await ext.evaluate(async () => (await chrome.storage.sync.get('settings')).settings?.voice)); return v !== 'af_heart' && v; }, 5000);
+    check('player changes the voice', !!voice, `menu ${select ? 'opened' : 'missing'}, voice now ${voice}`);
+    await call({ type: 'host', payload: { type: 'stop' } });
+    await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+  }
+
   // --- stop on navigation
   await page.bringToFront();
   await call({ type: 'extract', mode: 'page', tabId });

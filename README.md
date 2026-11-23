@@ -23,7 +23,7 @@ Load `dist/` as an unpacked extension: `chrome://extensions` (or `opera://extens
 - Popup **Read page** / **Read selection**, right-click menu, or **Alt+Shift+R**
 - **Alt+click** any paragraph to start reading from there
 - **Alt+Shift+P** pause/resume · **Alt+Shift+.** / **Alt+Shift+,** next/previous sentence
-- Floating player: previous / play-pause / next, speed (click to cycle), stop; media keys work too
+- Floating player: previous / play-pause / next, jump to highlight (when it is off-screen), voice, speed (click to cycle), stop; media keys work too
 - PDFs: press Read on a PDF tab, or right-click a PDF link → **Read PDF aloud** (opens the built-in viewer)
 - Google Docs: press Read on a Docs tab; the document opens in Spokify's Docs reader in a new tab (Docs draws on a canvas, so it is read from its export with your Google sign-in)
 - Reading a page again resumes where you stopped (the player offers **Restart**)

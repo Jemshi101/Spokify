@@ -2,7 +2,8 @@
 // highlighting, word timing, the floating player, and resume-where-you-left-off.
 import type { Sentence } from './extract';
 import { Player } from './player';
-import { loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
+import { VOICES, loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
+import { sortedSystemVoices, voiceLabel } from '../host/voices';
 import type { SpeechSegment, TabEvent } from '../shared/messages';
 import { loadPosition, savePosition, clearPosition } from './positions';
 
@@ -30,7 +31,29 @@ export function createReader(opts: ReaderOptions) {
   const player = new Player({
     onAction: (a) => send({ type: 'host', payload: { type: a } }),
     onSpeed: (speed) => saveSettings({ speed }),
+    onLocate: () => {
+      userScrolledAt = 0; // resume auto-scroll
+      const range = current && sentences[current.sid]?.range;
+      if (range) scrollBy({ top: range.getBoundingClientRect().top - innerHeight / 3, behavior: 'smooth' });
+      player.setLocate(false);
+    },
+    voiceMenu: async () => {
+      // Offer the voices of whatever is speaking: Lite (system voices) or the natural voices.
+      const [st, s] = await Promise.all([send({ type: 'host', payload: { type: 'status' } }).catch(() => null), loadSettings()]);
+      lite = st?.engine === 'system';
+      if (lite) {
+        const voices = await sortedSystemVoices();
+        return {
+          title: 'Lite · system voices',
+          current: s.systemVoice,
+          options: [{ value: '', label: 'Best available English voice' }, ...voices.map((v) => ({ value: v.voiceURI, label: voiceLabel(v) }))],
+        };
+      }
+      return { title: 'Natural voices', current: s.voice, options: VOICES.map((v) => ({ value: v.id, label: v.label })) };
+    },
+    onVoice: (value) => saveSettings(lite ? { systemVoice: value } : { voice: value }),
   });
+  let lite = false;
   loadSettings().then((s) => player.setSpeed(s.speed));
   onSettingsChanged((s) => player.setSpeed(s.speed));
 
@@ -83,6 +106,8 @@ export function createReader(opts: ReaderOptions) {
   function clear() {
     if (current) cancelAnimationFrame(current.raf);
     current = null;
+    player.setLocate(false);
+    player.closeMenu();
     highlight('tts-sentence', null);
     highlight('tts-word', null);
   }
@@ -92,6 +117,22 @@ export function createReader(opts: ReaderOptions) {
   function setClock(pos: number, rate: number, paused: boolean) {
     Object.assign(clock, { pos, rate, paused, t0: performance.now() });
   }
+
+  /** Shows the player's jump button while the sentence being read is off-screen. */
+  let locateQueued = false;
+  function updateLocate() {
+    if (locateQueued) return;
+    locateQueued = true;
+    requestAnimationFrame(() => {
+      locateQueued = false;
+      const range = current && sentences[current.sid]?.range;
+      const r = range?.getBoundingClientRect();
+      const off = !!r && (r.bottom < 0 || r.top > innerHeight);
+      player.setLocate(off);
+      document.documentElement.dataset.ttsLocate = String(off); // for tests
+    });
+  }
+  addEventListener('scroll', updateLocate, { passive: true, capture: true });
 
   function follow(range: Range) {
     if (Date.now() - userScrolledAt < 4000) return;
@@ -116,6 +157,7 @@ export function createReader(opts: ReaderOptions) {
     highlight('tts-sentence', s.range);
     highlight('tts-word', null);
     follow(s.range);
+    updateLocate();
     player.status(`${e.sid + 1} / ${e.total}`);
     player.progress(e.sid, e.total);
     debugState(e.sid, e.total);
