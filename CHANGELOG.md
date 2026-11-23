@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed: the natural voice sounded robotic, sharp and unintelligible. The default engine (WebGPU fp16) produced garbled audio in every browser; the default is now WebGPU fp32 (~330 MB download). Saved fp16 choices switch to Auto, and the old fp16 model is removed from the cache.
+- Tests: a new check compares the default voice with the CPU engine's rendering, so garbled output fails the build.
+
 ## 0.2.0
 
 - Renamed to Spokify (was TTS Reader).

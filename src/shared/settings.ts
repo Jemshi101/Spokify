@@ -1,4 +1,4 @@
-export type EngineId = 'webgpu-fp16' | 'webgpu-fp32' | 'wasm-q8';
+export type EngineId = 'webgpu-fp32' | 'wasm-q8';
 /** 'system' = the browser's built-in voices (lite mode, for machines without WebGPU). */
 export type EngineChoice = 'auto' | 'system' | EngineId;
 
@@ -20,8 +20,7 @@ export const MAX_SPEED = 3;
 /** Kokoro renders up to this speed itself; anything faster is pitch-preserving playback rate. */
 export const MAX_MODEL_SPEED = 1.5;
 
-export const ENGINES: Record<EngineId, { device: 'webgpu' | 'wasm'; dtype: 'fp16' | 'fp32' | 'q8'; label: string }> = {
-  'webgpu-fp16': { device: 'webgpu', dtype: 'fp16', label: 'WebGPU · fp16 (~165 MB)' },
+export const ENGINES: Record<EngineId, { device: 'webgpu' | 'wasm'; dtype: 'fp32' | 'q8'; label: string }> = {
   'webgpu-fp32': { device: 'webgpu', dtype: 'fp32', label: 'WebGPU · fp32 (~330 MB)' },
   'wasm-q8': { device: 'wasm', dtype: 'q8', label: 'CPU · q8 (~90 MB, slow)' },
 };
@@ -69,7 +68,10 @@ export function splitSpeed(speed: number): { modelSpeed: number; rate: number } 
 /** Settings live in storage.sync so they follow the user across browsers. */
 export async function loadSettings(): Promise<Settings> {
   const { settings } = await chrome.storage.sync.get('settings');
-  return { ...DEFAULT_SETTINGS, ...(settings as Partial<Settings> | undefined) };
+  const s = { ...DEFAULT_SETTINGS, ...(settings as Partial<Settings> | undefined) };
+  // 0.2.0 offered a WebGPU fp16 engine; its output is garbled, so old choices fall back to Auto.
+  if (s.engine !== 'auto' && s.engine !== 'system' && !(s.engine in ENGINES)) s.engine = 'auto';
+  return s;
 }
 
 export async function saveSettings(patch: Partial<Settings>): Promise<Settings> {

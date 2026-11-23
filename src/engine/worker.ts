@@ -59,9 +59,20 @@ async function loadEngine(engine: EngineId): Promise<void> {
   tts = instance;
 }
 
+/** Frees the ~165 MB fp16 model that 0.2.0 downloaded; nothing uses it any more. */
+async function dropUnusedModels() {
+  try {
+    for (const name of await caches.keys()) {
+      const cache = await caches.open(name);
+      for (const req of await cache.keys()) if (/model_fp16\.onnx/.test(req.url)) await cache.delete(req);
+    }
+  } catch {}
+}
+
 async function load({ engine = 'auto' }: { engine?: EngineChoice }): Promise<LoadInfo> {
   const gpu = await hasWebGPU();
-  const target: EngineId = engine === 'auto' || engine === 'system' ? (gpu ? 'webgpu-fp16' : 'wasm-q8') : engine;
+  // fp32 on WebGPU. fp16 is faster but its decoder output is garbled (robotic, unintelligible).
+  const target: EngineId = engine in ENGINES ? (engine as EngineId) : gpu ? 'webgpu-fp32' : 'wasm-q8';
   if (loaded && loaded.engine === target) return { ...loaded, cached: true };
   if (loading) await loading.catch(() => {});
   if (loaded && loaded.engine === target) return { ...loaded, cached: true };
@@ -81,6 +92,7 @@ async function load({ engine = 'auto' }: { engine?: EngineChoice }): Promise<Loa
       await loadEngine(used);
     }
     loaded = { engine: used, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, fallbackReason };
+    dropUnusedModels();
     return loaded;
   })();
   try {

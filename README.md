@@ -25,7 +25,7 @@ Load `dist/` as an unpacked extension: `chrome://extensions` (or `opera://extens
 - PDFs: press Read on a PDF tab, or right-click a PDF link → **Read PDF aloud** (opens the built-in viewer)
 - Reading a page again resumes where you stopped (the player offers **Restart**)
 
-First use downloads the voice model (~165 MB, cached afterwards); the welcome page does this with a progress bar.
+First use downloads the voice model (~330 MB, cached afterwards); the welcome page does this with a progress bar.
 Without WebGPU, **Auto** uses the browser's built-in voices (lite mode).
 
 ## Architecture
@@ -34,7 +34,7 @@ Without WebGPU, **Auto** uses the browser's built-in voices (lite mode).
 |---|---|
 | `src/background/sw.ts` | Service worker: starts the audio host (offscreen document; pinned tab where `chrome.offscreen` is missing), relays messages, menus, shortcuts, stops on tab close/navigation |
 | `src/host/host.ts` | Audio host: Kokoro path (worker RPC, 3-sentence lookahead, `<audio>` with pitch-preserving rate) and lite path (`speechSynthesis` + boundary events); media session |
-| `src/engine/worker.ts` | Kokoro (timestamped ONNX export). WebGPU fp16 by default, CPU fallback |
+| `src/engine/worker.ts` | Kokoro (timestamped ONNX export). WebGPU fp32 by default (fp16 garbles the voice), CPU fallback |
 | `src/engine/phonemize.ts` | Text normalization + espeak phonemization (ported from kokoro-js so we control it) |
 | `src/engine/align.ts` | Edit-distance alignment of per-word phonemes to the sentence → exact per-word start times from the model's `durations` |
 | `src/reader/extract.ts` | Readability-style article detection on the live DOM, paragraph/sentence/word segmentation with DOM ranges |

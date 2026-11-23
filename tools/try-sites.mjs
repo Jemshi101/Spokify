@@ -4,7 +4,8 @@ import puppeteer from 'puppeteer';
 import path from 'node:path';
 
 const urls = process.argv.slice(2);
-const browser = await puppeteer.launch({ headless: true, pipe: true, enableExtensions: [path.resolve('dist')] });
+const browser = await puppeteer.launch({ headless: true, pipe: true, protocolTimeout: 90000, enableExtensions: [path.resolve('dist')] });
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`${what} timed out after ${ms / 1000}s`)), ms))]);
 try {
   const sw = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('sw.js'));
   const ext = await browser.newPage();
@@ -13,6 +14,7 @@ try {
   await ext.evaluate(() => chrome.storage.local.set({ settings: { engine: 'wasm-q8', voice: 'af_heart', speed: 1 } }));
   for (const url of urls) {
     const page = await browser.newPage();
+    try {
     const isPdf = /\.pdf($|[?#])|arxiv\.org\/pdf\//i.test(url);
     const target = isPdf ? `chrome-extension://${new URL(sw.url()).host}/pdf.html?file=${encodeURIComponent(url)}` : url;
     await page.goto(target, { waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
@@ -20,7 +22,7 @@ try {
     // The segments are read from the 'read' message the service worker forwards to the host.
     const out = await page.evaluate(() => document.title);
     const tabId = await ext.evaluate(async (u, pdf) => (await chrome.tabs.query({}))?.find((t) => (pdf ? t.url?.includes('/pdf.html') : t.url?.startsWith(u.slice(0, 30))))?.id, target, isPdf);
-    const segs = await ext.evaluate(
+    const segs = await withTimeout(ext.evaluate(
       (id) =>
         new Promise((resolve) => {
           chrome.runtime.onMessage.addListener(function l(m) {
@@ -32,13 +34,16 @@ try {
           chrome.runtime.sendMessage({ target: 'sw', type: 'extract', mode: 'page', tabId: id });
         }),
       tabId,
-    );
+    ), 30000, 'extraction');
     await ext.evaluate(() => chrome.runtime.sendMessage({ target: 'sw', type: 'host', payload: { type: 'stop' } }));
     console.log(`\n== ${out} (${segs.length} segments)`);
     for (const t of segs.slice(0, 4)) console.log('  ▸', t.slice(0, 110));
     console.log('  …');
     for (const t of segs.slice(-3)) console.log('  ▸', t.slice(0, 110));
-    await page.close();
+    } catch (e) {
+      console.log(`\n== ${url}\n  ✖ ${e.message}`);
+    }
+    await page.close().catch(() => {});
   }
 } finally {
   await browser.close();

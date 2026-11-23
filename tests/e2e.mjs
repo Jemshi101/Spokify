@@ -1,8 +1,9 @@
 // End-to-end MVP checks in Chrome for Testing (headless). Run `npm run build` first.
-// Usage: node tests/e2e.mjs [--engine=webgpu-fp16] [--skip-pause]
+// Usage: node tests/e2e.mjs [--engine=webgpu-fp32] [--skip-pause]
 import puppeteer from 'puppeteer';
 import http from 'node:http';
 import path from 'node:path';
+import { spectralSimilarity } from './audio.mjs';
 
 const arg = (name, def) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1] ?? def;
 const engine = arg('engine', 'auto');
@@ -232,6 +233,34 @@ try {
   const wText = await waitFor(() => welcome.$eval('#engineText', (e) => (e.textContent.includes('Checking') ? '' : e.textContent)), 10000);
   const voiceCount = await welcome.$eval('#voice', (e) => e.options.length);
   check('welcome page detects the engine and lists voices', !!wText && voiceCount > 5, `${voiceCount} voices`);
+
+  // --- voice quality: the default engine must sound like the CPU reference (catches garbled output,
+  // e.g. WebGPU fp16, which is fast and well-timed but unintelligible).
+  const rendered = await welcome.evaluate(async () => {
+    const text = 'Hi! I can read any web page or PDF to you, and highlight each word as I go.';
+    const w = new Worker(new URL('worker.js', location.href), { type: 'module' });
+    let n = 0;
+    const call = (method, params) =>
+      new Promise((ok, no) => {
+        const id = ++n;
+        const h = ({ data }) => {
+          if (data.id !== id) return;
+          w.removeEventListener('message', h);
+          data.error ? no(new Error(data.error)) : ok(data.result);
+        };
+        w.addEventListener('message', h);
+        w.postMessage({ id, method, params });
+      });
+    const out = {};
+    for (const engine of ['auto', 'wasm-q8']) {
+      const r = await call('generate', { text, words: [], voice: 'af_heart', speed: 1, engine });
+      out[engine] = { engine: r.engine, samples: Array.from(r.samples) };
+    }
+    w.terminate();
+    return out;
+  });
+  const similarity = spectralSimilarity(rendered.auto.samples, rendered['wasm-q8'].samples);
+  check(`default voice (${rendered.auto.engine}) matches the CPU reference`, similarity > 0.6, `spectral similarity ${similarity.toFixed(2)}`);
 
   const r = await call({ type: 'host', payload: { type: 'env' } });
   console.log('engine:', JSON.stringify(r.worker?.loaded), 'last session stats:', JSON.stringify(st.stats));
