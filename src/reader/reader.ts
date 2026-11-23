@@ -34,7 +34,7 @@ export function createReader(opts: ReaderOptions) {
     onLocate: () => {
       userScrolledAt = 0; // resume auto-scroll
       const range = current && sentences[current.sid]?.range;
-      if (range) scrollBy({ top: range.getBoundingClientRect().top - innerHeight / 3, behavior: 'smooth' });
+      if (range) bringIntoView(range);
       player.setLocate(false);
     },
     voiceMenu: async () => {
@@ -137,10 +137,16 @@ export function createReader(opts: ReaderOptions) {
   }
   addEventListener('scroll', updateLocate, { passive: true, capture: true });
 
+  /** Centers the range, scrolling whichever container holds it (the window, or an inner panel as in e-learning apps). */
+  function bringIntoView(range: Range) {
+    const n = range.startContainer;
+    (n instanceof Element ? n : n.parentElement)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
   function follow(range: Range) {
     if (Date.now() - userScrolledAt < 4000) return;
     const r = range.getBoundingClientRect();
-    if (r.top < 80 || r.bottom > innerHeight - 120) scrollBy({ top: r.top - innerHeight / 3, behavior: 'smooth' });
+    if (r.top < 80 || r.bottom > innerHeight - 120) bringIntoView(range);
   }
 
   function onSentence(e: Extract<TabEvent, { type: 'sentence' }>) {

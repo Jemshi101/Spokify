@@ -56,6 +56,8 @@ export function findArticleRoot(doc: Document = document): Element {
   const scores = new Map<Element, number>();
   for (const el of doc.body.querySelectorAll('p,pre,td,blockquote,div,section,article')) {
     if (el.closest(SKIP_SELECTOR)) continue;
+    // Text that isn't rendered (closed accordions, inactive tabs) must not decide what gets read.
+    if (!el.checkVisibility({ visibilityProperty: true })) continue;
     // Only score elements that hold text directly (not just through child containers).
     let own = '';
     for (const n of el.childNodes) if (n.nodeType === Node.TEXT_NODE || (n as Element).matches?.('a,b,i,em,strong,span,code,font,br,small,abbr,q,cite,mark,u,s,sub')) own += n.textContent;
@@ -88,7 +90,7 @@ export function findArticleRoot(doc: Document = document): Element {
     for (const [k, v] of scores) if (el.contains(k)) w += v;
     return w;
   };
-  for (let entry: Element = best, level = 0; level < 6; level++) {
+  for (let entry: Element = best, level = 0; level < 10; level++) {
     const parent: Element | null = entry.parentElement;
     if (!parent || parent === doc.body || parent === doc.documentElement) break;
     const sig = signature(entry);
@@ -273,7 +275,10 @@ export function extractPage(fromEl?: Element | null, opts: ExtractOptions = {}):
   // Include the page title when it sits above the article container.
   const h1 = opts.root ? null : document.querySelector('h1');
   if (h1 && !root.contains(h1) && !h1.closest(SKIP_SELECTOR) && root.compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_PRECEDING) {
-    paragraphs = [...collectParagraphs(h1), ...paragraphs];
+    const title = collectParagraphs(h1);
+    // Skip it when the article starts with the same heading (e.g. a course's top bar repeats the lesson title).
+    const norm = (t?: string) => (t ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (title.length && norm(title[0].text) !== norm(paragraphs[0]?.text)) paragraphs = [...title, ...paragraphs];
   }
   paragraphs = dropEndSections(paragraphs);
 

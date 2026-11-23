@@ -47,6 +47,19 @@ ${[
   ['Version one', 'The first release could read web pages aloud with natural voices, highlight each word as it was spoken, keep playing in the background, and remember where you stopped. It also had keyboard shortcuts, a floating player with speed control, and a right-click menu for reading a selection, a whole page or a linked PDF document.'],
 ].map(([t, b]) => `<section class="release"><div class="box"><div class="box-body"><h2>${t}</h2><div class="markdown-body"><p>${b}</p></div></div></div></section>`).join('\n')}
 </main></body></html>`;
+// Like an e-learning lesson (Articulate Rise): content scrolls inside a panel, blocks are nested deep,
+// and a closed accordion hides a long transcript that must not be read.
+const deep = (html) => '<div><div><div class="row"><div class="col"><div class="view"><div>' + html + '</div></div></div></div></div></div>';
+const COURSE = `<!doctype html><html><head><title>Lesson</title><style>html,body{margin:0;height:100%;overflow:hidden}#scroller{height:100%;overflow:auto}.gap{height:1600px}</style></head><body>
+<header class="bar"><h1>Introduction to agents</h1></header>
+<div id="scroller"><main><div class="lesson">
+${[
+  '<h2>Introduction to agents</h2><p>An agent is a software system that works toward a goal for you, usually with a language model. It decides which steps to take, which tools to use, and when the job is done.</p><div class="gap"></div>',
+  '<h2>Agents versus chatbots</h2><p>Chatbots follow fixed scripts, answer one question at a time, and stay inside a single source of data. Agents, by contrast, plan several steps, call tools, and keep going until the task is finished.</p>',
+  '<section class="accordion"><button>Show transcript</button><section class="accordion__content" style="display:none"><p>Speaker one: this hidden transcript is long, much longer than anything else on the page, and it rambles on about many things, one after another, with commas, clauses, asides, and more commas, so that a text-length score would pick it first.</p><p>Speaker two: indeed, and it keeps going, sentence after sentence, paragraph after paragraph, none of which is visible on the screen.</p></section></section>',
+  '<h2>Key takeaway</h2><p>Agents plan, use tools, and carry a task through to the end, within the limits you set. They are used for travel, scheduling, support, and software work.</p>',
+].map((b) => '<div class="block">' + deep(b) + '</div>').join('\n')}
+</div></main></div></body></html>`;
 const OTHER = '<!doctype html><title>Other</title><p>Another page.</p>';
 
 let pdfBytes = null;
@@ -57,6 +70,7 @@ const LONG_DOC = `<!doctype html><html><body style="margin:0;font:12pt serif;orp
 <p>${CROSS}</p><p>After that, a short closing sentence ends the document.</p></body></html>`;
 const server = http
   .createServer((req, res) => {
+    if (req.url === '/course') return res.writeHead(200, { 'content-type': 'text/html' }).end(COURSE);
     if (req.url === '/releases') return res.writeHead(200, { 'content-type': 'text/html' }).end(RELEASES);
     if (req.url === '/gdoc') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(GDOC);
     if (req.url === '/long.pdf') return res.writeHead(200, { 'content-type': 'application/pdf', 'access-control-allow-origin': '*' }).end(longPdfBytes);
@@ -409,6 +423,23 @@ try {
     const rs = await Promise.race([relSegs, sleep(30000).then(() => [])]);
     check('lists of entries (e.g. GitHub releases) are read from the first entry', rs[0] === 'Releases' && rs[1] === 'Version three' && rs.includes('Version one'), JSON.stringify(rs.slice(0, 3)));
     await call({ type: 'host', payload: { type: 'stop' } });
+  }
+
+  // --- e-learning style page: headings read, hidden accordion text skipped, inner panel scrolls along
+  {
+    await setSettings({ engine: 'system', voice: 'af_heart', speed: 2 });
+    const cSegs = segsOf();
+    await page.goto(`${base}/course`);
+    await page.bringToFront();
+    await call({ type: 'extract', mode: 'page', tabId });
+    const cs = await Promise.race([cSegs, sleep(30000).then(() => [])]);
+    check('lesson pages read headings and skip hidden accordion text',
+      cs[0] === 'Introduction to agents' && cs.filter((t) => t === 'Introduction to agents').length === 1 && cs.includes('Key takeaway') && cs.includes('Agents versus chatbots') && !cs.some((t) => /Speaker/.test(t)),
+      JSON.stringify(cs));
+    const scrolled = await waitFor(() => page.evaluate(() => document.getElementById('scroller').scrollTop > 500), 20000);
+    check('auto-scroll follows text inside a scrolling panel', !!scrolled, `panel scrollTop ${await page.evaluate(() => Math.round(document.getElementById('scroller').scrollTop))}`);
+    await call({ type: 'host', payload: { type: 'stop' } });
+    await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
   }
 
   // --- welcome page

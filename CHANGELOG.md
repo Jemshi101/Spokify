@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- E-learning and app-like pages (e.g. Google Cloud Skills courses built with Articulate Rise): Spokify read only text hidden in a closed accordion, so nothing on screen was highlighted. Hidden text no longer decides what the article is, the whole lesson is read (headings included), and the page title isn't read twice.
+- Auto-scroll and the jump-to-highlight button work on pages that scroll inside a panel rather than the window.
+
 ## 0.4.1
 
 - Sentences ending in a single capital letter end there: "World War I. The war ended" was read as one sentence. A letter followed by a period now ends the sentence when the next word usually starts one (The, It, He…), or when it's a Roman numeral after a numbered word (War, Chapter, Part, Act…). Initials stay joined ("John F. Kennedy", "J. R. R. Tolkien").
