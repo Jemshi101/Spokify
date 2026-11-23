@@ -41,7 +41,7 @@ async function init() {
 
   if (!gpu) {
     $('engineText').textContent =
-      "This browser doesn't expose WebGPU, which the natural voices need to run smoothly. TTS Reader will use your system's built-in voices instead (lite mode). Highlighting and everything else work the same.";
+      "This browser doesn't expose WebGPU, which the natural voices need to run smoothly. Spokify will use your system's built-in voices instead (lite mode). Highlighting and everything else work the same.";
     note('engineNote', 'Lite mode is on. If you enable WebGPU later, switch the engine back to Auto in the toolbar popup.', 'warn');
     if (s.engine === 'auto') await saveSettings({ engine: 'system' });
   } else {

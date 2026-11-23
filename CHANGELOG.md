@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Renamed to Spokify.
+
 ## 0.2.0
 
 - Lite mode: the browser's built-in voices for machines without WebGPU ("Auto" picks it automatically), with word highlighting from boundary events.

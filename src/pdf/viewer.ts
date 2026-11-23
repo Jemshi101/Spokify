@@ -81,7 +81,7 @@ async function render() {
     }).promise;
   } catch (e) {
     const msg = String((e as Error).message ?? e);
-    const hint = fileUrl.startsWith('file:') ? ' For local files, enable "Allow access to file URLs" for TTS Reader in chrome://extensions.' : '';
+    const hint = fileUrl.startsWith('file:') ? ' For local files, enable "Allow access to file URLs" for Spokify in chrome://extensions.' : '';
     setStatus(`Couldn't open this PDF: ${msg}.${hint}`, true);
     return false;
   }

@@ -1,4 +1,4 @@
-# TTS Reader
+# Spokify
 
 Chrome/Opera extension (MV3) that reads web pages aloud with natural voices that run **locally** (Kokoro-82M via kokoro-js, WebGPU). Read-along sentence + word highlighting, background play, no servers or API keys.
 

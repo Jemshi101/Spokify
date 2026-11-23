@@ -417,7 +417,7 @@ function updateMediaSession(s: Session | null) {
     ms.playbackState = 'none';
     return;
   }
-  ms.metadata = new MediaMetadata({ title: s.title || 'Reading aloud', artist: 'TTS Reader' });
+  ms.metadata = new MediaMetadata({ title: s.title || 'Reading aloud', artist: 'Spokify' });
   ms.playbackState = s.paused ? 'paused' : 'playing';
 }
 
