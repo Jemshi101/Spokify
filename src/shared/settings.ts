@@ -1,17 +1,23 @@
-export type EngineId = 'webgpu-fp32' | 'wasm-q8';
-/** 'system' = the browser's built-in voices (lite mode, for machines without WebGPU). */
+export type EngineId = 'webgpu-fp32' | 'wasm-q8' | 'piper';
+/**
+ * 'auto' = Kokoro on a fast GPU, else Piper on the CPU.
+ * 'system' = the browser's built-in voices (lite mode).
+ */
 export type EngineChoice = 'auto' | 'system' | EngineId;
 
 export interface Settings {
   engine: EngineChoice;
   /** Kokoro voice id. */
   voice: string;
+  /** Piper voice id (rhasspy/piper-voices name). */
+  piperVoice: string;
   /** speechSynthesis voiceURI for lite mode ('' = browser default English voice). */
   systemVoice: string;
   speed: number;
 }
 
-export const DEFAULT_SETTINGS: Settings = { engine: 'auto', voice: 'af_heart', systemVoice: '', speed: 1 };
+export const DEFAULT_PIPER_VOICE = 'en_US-lessac-medium';
+export const DEFAULT_SETTINGS: Settings = { engine: 'auto', voice: 'af_heart', piperVoice: DEFAULT_PIPER_VOICE, systemVoice: '', speed: 1 };
 
 export const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 export const MIN_SPEED = 0.5;
@@ -20,10 +26,36 @@ export const MAX_SPEED = 3;
 /** Kokoro renders up to this speed itself; anything faster is pitch-preserving playback rate. */
 export const MAX_MODEL_SPEED = 1.5;
 
-export const ENGINES: Record<EngineId, { device: 'webgpu' | 'wasm'; dtype: 'fp32' | 'q8'; label: string }> = {
-  'webgpu-fp32': { device: 'webgpu', dtype: 'fp32', label: 'WebGPU · fp32 (~330 MB)' },
-  'wasm-q8': { device: 'wasm', dtype: 'q8', label: 'CPU · q8 (~90 MB, slow)' },
+export const ENGINES: Record<EngineId, { family: 'kokoro' | 'piper'; device: 'webgpu' | 'wasm'; dtype: 'fp32' | 'q8'; label: string }> = {
+  'webgpu-fp32': { family: 'kokoro', device: 'webgpu', dtype: 'fp32', label: 'Kokoro · WebGPU (best, ~330 MB)' },
+  piper: { family: 'piper', device: 'wasm', dtype: 'fp32', label: 'Piper · CPU (light, ~63 MB per voice)' },
+  'wasm-q8': { family: 'kokoro', device: 'wasm', dtype: 'q8', label: 'Kokoro · CPU (~90 MB, slow)' },
 };
+
+/** Piper voices offered (single-speaker, medium quality, ~63 MB each) from rhasspy/piper-voices. */
+export const PIPER_VOICES: { id: string; label: string }[] = [
+  { id: 'en_US-lessac-medium', label: 'Lessac · US female' },
+  { id: 'en_US-amy-medium', label: 'Amy · US female' },
+  { id: 'en_US-hfc_female-medium', label: 'HFC · US female' },
+  { id: 'en_US-kristin-medium', label: 'Kristin · US female' },
+  { id: 'en_US-ljspeech-medium', label: 'LJ · US female' },
+  { id: 'en_US-ryan-medium', label: 'Ryan · US male' },
+  { id: 'en_US-hfc_male-medium', label: 'HFC · US male' },
+  { id: 'en_US-joe-medium', label: 'Joe · US male' },
+  { id: 'en_US-bryce-medium', label: 'Bryce · US male' },
+  { id: 'en_GB-alba-medium', label: 'Alba · Scottish female' },
+  { id: 'en_GB-cori-medium', label: 'Cori · UK female' },
+  { id: 'en_GB-jenny_dioco-medium', label: 'Jenny · UK female' },
+  { id: 'en_GB-alan-medium', label: 'Alan · UK male' },
+  { id: 'en_GB-northern_english_male-medium', label: 'Northern English · UK male' },
+];
+
+/** Where a Piper voice's model and config download from. */
+export function piperUrls(id: string): { model: string; config: string } {
+  const [locale, name, quality] = id.split('-');
+  const base = `https://huggingface.co/rhasspy/piper-voices/resolve/main/${locale.split('_')[0]}/${locale}/${name}/${quality}/${id}`;
+  return { model: `${base}.onnx`, config: `${base}.onnx.json` };
+}
 
 export const VOICES: { id: string; label: string }[] = [
   { id: 'af_heart', label: 'Heart · US female' },
@@ -71,6 +103,7 @@ export async function loadSettings(): Promise<Settings> {
   const s = { ...DEFAULT_SETTINGS, ...(settings as Partial<Settings> | undefined) };
   // 0.2.0 offered a WebGPU fp16 engine; its output is garbled, so old choices fall back to Auto.
   if (s.engine !== 'auto' && s.engine !== 'system' && !(s.engine in ENGINES)) s.engine = 'auto';
+  if (!PIPER_VOICES.some((v) => v.id === s.piperVoice)) s.piperVoice = DEFAULT_PIPER_VOICE;
   return s;
 }
 

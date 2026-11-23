@@ -8,7 +8,9 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    // onnxruntime-web's "exports" hide its types.d.ts from TypeScript.
+    "paths": { "onnxruntime-web": ["./node_modules/onnxruntime-web/types.d.ts"] }
   },
   "include": ["src", "tests/unit"]
 }

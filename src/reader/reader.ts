@@ -2,7 +2,7 @@
 // highlighting, word timing, the floating player, and resume-where-you-left-off.
 import type { Sentence } from './extract';
 import { Player } from './player';
-import { VOICES, loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
+import { PIPER_VOICES, VOICES, loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
 import { sortedSystemVoices, voiceLabel } from '../host/voices';
 import type { SpeechSegment, TabEvent } from '../shared/messages';
 import { loadPosition, savePosition, clearPosition } from './positions';
@@ -40,8 +40,11 @@ export function createReader(opts: ReaderOptions) {
     voiceMenu: async () => {
       // Offer the voices of whatever is speaking: Lite (system voices) or the natural voices.
       const [st, s] = await Promise.all([send({ type: 'host', payload: { type: 'status' } }).catch(() => null), loadSettings()]);
-      lite = st?.engine === 'system';
-      if (lite) {
+      family = st?.engine === 'system' ? 'system' : st?.engine === 'piper' ? 'piper' : 'kokoro';
+      if (family === 'piper') {
+        return { title: 'Piper voices (CPU)', current: s.piperVoice, options: PIPER_VOICES.map((v) => ({ value: v.id, label: v.label })) };
+      }
+      if (family === 'system') {
         const voices = await sortedSystemVoices();
         return {
           title: 'Lite · system voices',
@@ -49,11 +52,11 @@ export function createReader(opts: ReaderOptions) {
           options: [{ value: '', label: 'Best available English voice' }, ...voices.map((v) => ({ value: v.voiceURI, label: voiceLabel(v) }))],
         };
       }
-      return { title: 'Natural voices', current: s.voice, options: VOICES.map((v) => ({ value: v.id, label: v.label })) };
+      return { title: 'Kokoro voices', current: s.voice, options: VOICES.map((v) => ({ value: v.id, label: v.label })) };
     },
-    onVoice: (value) => saveSettings(lite ? { systemVoice: value } : { voice: value }),
+    onVoice: (value) => saveSettings(family === 'system' ? { systemVoice: value } : family === 'piper' ? { piperVoice: value } : { voice: value }),
   });
-  let lite = false;
+  let family: 'kokoro' | 'piper' | 'system' = 'kokoro';
   loadSettings().then((s) => player.setSpeed(s.speed));
   onSettingsChanged((s) => player.setSpeed(s.speed));
 

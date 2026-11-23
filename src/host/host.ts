@@ -5,7 +5,7 @@
 //  - kokoro: the TTS worker renders sentences ahead of time; <audio> plays them.
 //  - system: the browser's speechSynthesis (lite mode for machines without WebGPU);
 //            word highlighting comes from its boundary events.
-import { splitSpeed, type Settings } from '../shared/settings';
+import { ENGINES, splitSpeed, type EngineId, type Settings } from '../shared/settings';
 import type { HostCommand, HostStatus, LoadInfo, ReadingStats, SpeechSegment, TabEvent } from '../shared/messages';
 import { floatWav } from './wav';
 import { pickSystemVoice, systemVoices } from './voices';
@@ -74,13 +74,21 @@ function hasWebGPU(): Promise<boolean> {
   return gpuCheck;
 }
 
+/** Set when Auto's natural voices failed outright (e.g. the voice couldn't download): use Lite voices. */
+let neuralFailed = false;
+
 async function resolveKind(settings: Settings): Promise<'kokoro' | 'system'> {
   if (settings.engine === 'system') return 'system';
-  if (settings.engine === 'auto') {
-    await gpuSlowLoaded;
-    return (await hasWebGPU()) && !gpuSlow ? 'kokoro' : 'system';
-  }
-  return 'kokoro';
+  if (settings.engine === 'auto' && neuralFailed) return 'system';
+  return 'kokoro'; // a neural engine: Kokoro or Piper (see neuralTarget)
+}
+
+/** The neural engine and voice to use: Kokoro on a fast GPU, else Piper on the CPU. */
+async function neuralTarget(settings: Settings): Promise<{ engine: EngineId; voice: string }> {
+  await gpuSlowLoaded;
+  const engine: EngineId =
+    settings.engine in ENGINES ? (settings.engine as EngineId) : (await hasWebGPU()) && !gpuSlow ? 'webgpu-fp32' : 'piper';
+  return { engine, voice: engine === 'piper' ? settings.piperVoice : settings.voice };
 }
 
 // ---------- session ----------
@@ -133,7 +141,7 @@ function status(): HostStatus {
     sid: s?.idx ?? null,
     total: s?.segments.length ?? 0,
     engine: s?.engine ?? null,
-    voice: s?.kind === 'system' ? (s.voiceName ?? null) : (s?.settings.voice ?? null),
+    voice: s ? (s.voiceName ?? (s.kind === 'system' ? null : s.settings.voice)) : null,
     stats: s?.stats ?? null,
   };
 }
@@ -206,16 +214,12 @@ async function pump(s: Session) {
       const epoch = s.epoch;
       const { modelSpeed } = splitSpeed(s.settings.speed);
       const seg = s.segments[i];
-      const r = await rpc('generate', {
-        text: seg.text,
-        words: seg.words,
-        voice: s.settings.voice,
-        speed: modelSpeed,
-        engine: s.settings.engine === 'system' ? 'auto' : s.settings.engine,
-      });
+      const target = await neuralTarget(s.settings);
+      const r = await rpc('generate', { text: seg.text, words: seg.words, voice: target.voice, speed: modelSpeed, engine: target.engine });
       if (session !== s) return;
       s.engine = r.engine;
-      if (await tooSlow(s.settings, r.realtime)) return void switchToLite(s, r.realtime);
+      s.voiceName = r.engine === 'piper' ? (r.voice ?? target.voice) : target.voice;
+      if (await tooSlow(s.settings, r.engine, r.realtime)) return void switchToPiper(s, r.realtime);
       if (epoch !== s.epoch || i < s.idx) continue;
       s.clips.set(i, { url: URL.createObjectURL(floatWav(r.samples, r.sampleRate)), audioSec: r.audioSec, wordTimes: r.wordTimes, exact: r.exact, modelSpeed });
       s.stats.generated++;
@@ -225,31 +229,39 @@ async function pump(s: Session) {
       if (s.waiting && i === s.idx) playClip(s);
     }
   } catch (e) {
-    if (session === s) {
-      emit(s, { type: 'error', message: String((e as Error).message ?? e) });
-      teardown(s);
+    if (session !== s) return;
+    const message = String((e as Error).message ?? e);
+    if (s.settings.engine === 'auto' && !neuralFailed) {
+      // Auto: natural voices failed (e.g. offline before the voice was downloaded). Keep reading with Lite voices.
+      neuralFailed = true;
+      const { tabId, segments, idx, title, settings } = s;
+      await read({ tabId, segments, settings, startAt: idx, title }, true);
+      if (session) emit(session, { type: 'notice', message: `Natural voice unavailable (${message}). Using Lite voices.` });
+      return;
     }
+    emit(s, { type: 'error', message });
+    teardown(s);
   } finally {
     s.pumping = false;
   }
 }
 
-/** True (and remembered, and the GPU model freed) when Auto's GPU measured too slow for natural voices. */
-async function tooSlow(settings: Settings, realtime: number | undefined): Promise<boolean> {
+/** True (and remembered, and the GPU model freed) when Auto's GPU measured too slow for Kokoro. */
+async function tooSlow(settings: Settings, engine: EngineId | undefined, realtime: number | undefined): Promise<boolean> {
   await gpuSlowLoaded;
-  if (settings.engine !== 'auto' || realtime == null || realtime >= slowLimit) return false;
+  if (settings.engine !== 'auto' || engine !== 'webgpu-fp32' || realtime == null || realtime >= slowLimit) return false;
   gpuSlow = { realtime, at: Date.now() };
   await chrome.runtime.sendMessage({ target: 'sw', type: 'saveMachine', gpuSlow }).catch(() => {});
   rpc('unload').catch(() => {});
   return true;
 }
 
-/** Auto found the GPU too slow for natural voices: continue this sentence with Lite voices. */
-async function switchToLite(s: Session, realtime: number) {
+/** Auto found the GPU too slow for Kokoro: continue this sentence with Piper on the CPU. */
+async function switchToPiper(s: Session, realtime: number) {
   if (session !== s) return;
   const { tabId, segments, idx, title, settings } = s;
   await read({ tabId, segments, settings, startAt: idx, title }, true);
-  if (session) emit(session, { type: 'notice', message: `Natural voice too slow here (${realtime}× real time). Using Lite voices.` });
+  if (session) emit(session, { type: 'notice', message: `Graphics too slow for Kokoro (${realtime}× real time). Using Piper voices.` });
 }
 
 function playClip(s: Session) {
@@ -437,7 +449,11 @@ async function applySettings(next: Settings) {
     return;
   }
 
-  const needsRegen = prev.voice !== next.voice || prev.engine !== next.engine || splitSpeed(prev.speed).modelSpeed !== splitSpeed(next.speed).modelSpeed;
+  const needsRegen =
+    prev.voice !== next.voice ||
+    prev.piperVoice !== next.piperVoice ||
+    prev.engine !== next.engine ||
+    splitSpeed(prev.speed).modelSpeed !== splitSpeed(next.speed).modelSpeed;
   if (needsRegen) {
     // Keep the sentence that's playing; regenerate everything queued after it.
     s.epoch++;
@@ -494,8 +510,9 @@ async function speakSample({ text, settings }: { text: string; settings: Setting
     return { engine: 'system', voice: v?.name ?? 'default' };
   }
   const { modelSpeed, rate } = splitSpeed(settings.speed);
-  const r = await rpc('generate', { text, words: [], voice: settings.voice, speed: modelSpeed, engine: settings.engine });
-  if (await tooSlow(settings, r.realtime)) return { ...(await speakSample({ text, settings })), slow: gpuSlow };
+  const target = await neuralTarget(settings);
+  const r = await rpc('generate', { text, words: [], voice: target.voice, speed: modelSpeed, engine: target.engine });
+  if (await tooSlow(settings, r.engine, r.realtime)) return { ...(await speakSample({ text, settings })), slow: gpuSlow };
   const audio = new Audio(URL.createObjectURL(floatWav(r.samples, r.sampleRate)));
   audio.playbackRate = rate;
   await audio.play();
@@ -507,7 +524,14 @@ const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   machine: (m) => applyMachine(m),
   warmup: async (m) => {
     if ((await resolveKind(m.settings)) === 'kokoro') {
-      rpc('load', { engine: m.settings.engine }).then((info) => tooSlow(m.settings, info?.realtime), () => {});
+      // Load (and download) the voice now. If Auto finds the GPU too slow, get Piper ready instead.
+      const t = await neuralTarget(m.settings);
+      rpc('load', t).then(
+        async (info) => {
+          if (await tooSlow(m.settings, info?.engine, info?.realtime)) rpc('load', await neuralTarget(m.settings)).catch(() => {});
+        },
+        () => {},
+      );
     }
     return { ok: true };
   },

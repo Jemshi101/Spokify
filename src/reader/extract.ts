@@ -21,6 +21,8 @@ const SKIP_SELECTOR = [
   'header:not(article header):not(main header)',
   '[role=navigation]', '[role=banner]', '[role=contentinfo]', '[role=complementary]', '[role=dialog]',
   '[aria-hidden=true]', '[hidden]', '[contenteditable=true]', '[data-nosnippet]', '.nocontent', '[role=tooltip]',
+  // Collapsed sections: their content isn't on screen (e.g. GitHub's "Assets … Loading").
+  'details:not([open])',
 ].join(',');
 
 /** Readability-style class/id hints for boilerplate inside an article. */
@@ -76,6 +78,26 @@ export function findArticleRoot(doc: Document = document): Element {
     }
   }
   if (!best) return doc.querySelector('article,main,[role=main]') ?? doc.body;
+
+  // Pages of repeated entries (release notes, blog indexes, forum threads): the best block is just
+  // one entry. If an ancestor has siblings shaped like it (same tag and classes) that also hold real
+  // text, read the whole list. Otherwise only the longest entry would be read.
+  const signature = (el: Element) => `${el.tagName}.${[...el.classList].sort().join('.')}`;
+  const weight = (el: Element) => {
+    let w = 0;
+    for (const [k, v] of scores) if (el.contains(k)) w += v;
+    return w;
+  };
+  for (let entry: Element = best, level = 0; level < 6; level++) {
+    const parent: Element | null = entry.parentElement;
+    if (!parent || parent === doc.body || parent === doc.documentElement) break;
+    const sig = signature(entry);
+    const min = weight(entry) * 0.1;
+    const current = entry;
+    const alike = [...parent.children].filter((c) => c !== current && signature(c) === sig && weight(c) > Math.max(min, 3));
+    if (alike.length) return parent;
+    entry = parent;
+  }
 
   let root: Element = best;
   for (let level = 0; level < 2; level++) {

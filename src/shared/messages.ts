@@ -62,6 +62,8 @@ export interface ReadingStats {
 
 export interface LoadInfo {
   engine: EngineId;
+  /** Piper: the loaded voice id. */
+  voice?: string;
   requested: EngineChoice;
   loadMs: number;
   cached: boolean;

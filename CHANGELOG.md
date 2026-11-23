@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- **Piper voices**: natural-sounding voices that run on the processor (~63 MB each, 10–15× faster than real time on an M1). 14 English voices (US and UK). **Auto** now uses Kokoro when the graphics keep up and Piper otherwise, so computers with weak graphics (e.g. Intel UHD) get natural voices instead of the robotic system ones. System voices are the last resort when natural voices fail entirely (e.g. offline before the download).
+- Voice lists for Piper in the popup, the player and the welcome page; the popup shows which engine and voice are speaking.
+- If WebGPU fails to start, Spokify falls back to Piper instead of the slow CPU build of Kokoro.
+- Pages made of repeated entries (GitHub releases, blog indexes, forum threads) are read from the first entry; before, only the longest entry was read (on a releases page, often an old version).
+- Collapsed sections (closed `<details>`) aren't read.
+- **Fixed extension id** (`llacpmmoocpaoaijceajaknlbdedennp`): loading a new version's folder, or replacing the files and pressing reload, keeps the downloaded voices. (Removing the extension still deletes them; that's browser policy.) This version itself has a new id, so its voices download once more.
+
 ## 0.3.2
 
 - Player: a **jump to highlight** button (amber target) appears while the sentence being read is off-screen; it scrolls back to it and turns auto-scroll back on.

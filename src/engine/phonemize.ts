@@ -71,8 +71,11 @@ export function normalizeText(text: string): string {
   );
 }
 
-/** Same pipeline as kokoro-js `phonemize(text, "a"|"b")`. */
-export async function phonemizeText(text: string, lang: 'a' | 'b'): Promise<string> {
+/**
+ * Normalized text → espeak-ng phonemes for `voice` (e.g. "en-us", "en-gb-x-rp"), with the text's
+ * punctuation kept in place (espeak drops it; models use it for pauses). This is what Piper reads.
+ */
+export async function phonemizeEspeak(text: string, voice: string): Promise<string> {
   const norm = normalizeText(text);
   const pieces: { punct: boolean; text: string }[] = [];
   let last = 0;
@@ -83,12 +86,15 @@ export async function phonemizeText(text: string, lang: 'a' | 'b'): Promise<stri
   }
   if (last < norm.length) pieces.push({ punct: false, text: norm.slice(last) });
 
-  const voice = lang === 'a' ? 'en-us' : 'en';
   const joined = (
     await Promise.all(pieces.map(async (p) => (p.punct ? p.text : (await espeak(p.text, voice)).join(' '))))
   ).join('');
+  return joined.trim();
+}
 
-  let ps = joined
+/** Same pipeline as kokoro-js `phonemize(text, "a"|"b")`: espeak plus Kokoro's adjustments. */
+export async function phonemizeText(text: string, lang: 'a' | 'b'): Promise<string> {
+  let ps = (await phonemizeEspeak(text, lang === 'a' ? 'en-us' : 'en'))
     .replace(/kəkˈoːɹoʊ/g, 'kˈoʊkəɹoʊ')
     .replace(/kəkˈɔːɹəʊ/g, 'kˈəʊkəɹəʊ')
     .replace(/ʲ/g, 'j')
@@ -103,12 +109,15 @@ export async function phonemizeText(text: string, lang: 'a' | 'b'): Promise<stri
 
 const wordCache = new Map<string, string>();
 
-/** Phonemes of a single written word, cached (common words repeat constantly). */
-export async function phonemizeWord(word: string, lang: 'a' | 'b'): Promise<string> {
+/**
+ * Phonemes of a single written word, cached (common words repeat constantly).
+ * `lang` is a Kokoro language ('a'/'b') or, for Piper, an espeak voice name.
+ */
+export async function phonemizeWord(word: string, lang: string): Promise<string> {
   const key = `${lang}|${word}`;
   let ps = wordCache.get(key);
   if (ps === undefined) {
-    ps = await phonemizeText(word, lang);
+    ps = lang === 'a' || lang === 'b' ? await phonemizeText(word, lang) : await phonemizeEspeak(word, lang);
     if (wordCache.size > 5000) wordCache.clear();
     wordCache.set(key, ps);
   }

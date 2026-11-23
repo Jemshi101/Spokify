@@ -1,6 +1,6 @@
 # Spokify
 
-Chrome/Opera extension (MV3) that reads web pages aloud with natural voices that run **locally** (Kokoro-82M via kokoro-js, WebGPU). Read-along sentence + word highlighting, background play, no servers or API keys.
+Chrome/Opera/Edge extension (MV3) that reads web pages aloud with natural voices that run **locally**: Kokoro-82M (via kokoro-js, WebGPU) on capable graphics, Piper voices on the CPU everywhere else. Read-along sentence + word highlighting, background play, no servers or API keys.
 
 ## Develop
 
@@ -16,7 +16,9 @@ OUT=<dir> node tools/engine-probe.mjs [chrome|opera]   # audio stats per engine
 npm run icons          # re-render icons from tools/icon.svg
 ```
 
-Load `dist/` as an unpacked extension: `chrome://extensions` (or `opera://extensions`) → Developer mode → Load unpacked.
+Load `dist/` as an unpacked extension: `chrome://extensions` (or `opera://extensions`, `edge://extensions`) → Developer mode → Load unpacked.
+
+The manifest pins the extension id (`llacpmmoocpaoaijceajaknlbdedennp`) with a public `key`, so every build and folder is the same extension. To update without re-downloading voices, replace the folder's files (or load the new folder) and press reload in the extensions page; **removing** the extension deletes its downloaded voices (browser policy). The private key is in `.keys/` (git-ignored) and is only needed to pack a `.crx`.
 
 ## Use
 
@@ -28,8 +30,11 @@ Load `dist/` as an unpacked extension: `chrome://extensions` (or `opera://extens
 - Google Docs: press Read on a Docs tab; the document opens in Spokify's Docs reader in a new tab (Docs draws on a canvas, so it is read from its export with your Google sign-in)
 - Reading a page again resumes where you stopped (the player offers **Restart**)
 
-First use downloads the voice model (~330 MB, cached afterwards); the welcome page does this with a progress bar.
-Without WebGPU, **Auto** uses the browser's built-in voices (lite mode). Auto also times the GPU when the voice loads: below 1.3× real time (weak integrated graphics) it switches to lite mode and says so in the popup; choosing Auto again re-tests.
+First use downloads the voice (Kokoro ~330 MB, or a Piper voice ~63 MB; cached afterwards); the welcome page does this with a progress bar.
+
+**Auto** picks the engine: Kokoro on WebGPU when the graphics keep up (it times them when the voice loads; below 1.3× real time counts as too slow), otherwise **Piper** on the CPU (~10–15× real time on an M1). If natural voices fail entirely (e.g. offline before a download), it falls back to the browser's built-in voices (lite mode). Choosing Auto again in the popup re-tests the graphics.
+
+Piper voices download from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices); each voice has its own license (see its `MODEL_CARD`). Piper doesn't report word timings, so its word highlighting is estimated from the phoneme alignment (close, not exact like Kokoro's).
 
 ## Architecture
 
@@ -37,7 +42,8 @@ Without WebGPU, **Auto** uses the browser's built-in voices (lite mode). Auto al
 |---|---|
 | `src/background/sw.ts` | Service worker: starts the audio host (offscreen document; pinned tab where `chrome.offscreen` is missing), relays messages, menus, shortcuts, stops on tab close/navigation |
 | `src/host/host.ts` | Audio host: Kokoro path (worker RPC, 3-sentence lookahead, `<audio>` with pitch-preserving rate) and lite path (`speechSynthesis` + boundary events); media session |
-| `src/engine/worker.ts` | Kokoro (timestamped ONNX export). WebGPU fp32 by default (fp16, q4f16 and uint8 garble the voice), CPU fallback; one request at a time; times the GPU on load |
+| `src/engine/worker.ts` | Kokoro (timestamped ONNX export, WebGPU fp32; fp16, q4f16 and uint8 garble the voice) or Piper; one model in memory, one request at a time; times the engine on load |
+| `src/engine/piper.ts` | Piper voices: cached download, espeak phonemes → ids, ONNX Runtime (WASM), estimated word times |
 | `src/engine/phonemize.ts` | Text normalization + espeak phonemization (ported from kokoro-js so we control it) |
 | `src/engine/align.ts` | Edit-distance alignment of per-word phonemes to the sentence → exact per-word start times from the model's `durations` |
 | `src/reader/extract.ts` | Readability-style article detection on the live DOM, paragraph/sentence/word segmentation with DOM ranges |

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Spokify",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Reads web pages aloud with natural voices that run locally (Kokoro). Read-along highlighting, background play.",
   "action": {
     "default_popup": "popup.html",
@@ -78,5 +78,6 @@
     "48": "icons/48.png",
     "128": "icons/128.png"
   },
-  "minimum_chrome_version": "128"
+  "minimum_chrome_version": "128",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqg5MEPDr/RotwDAQjNJz8B5fwEPMp7EX7ELnt+J8+L+fZ4FtBKJmLKNA7w7YYOExcmDb8aPR33WXVHW2XclQG/Ke960FgERa56sVfwWQMcbtc6/v0NhEL9Mje/WQ+/Hk6cJqnp4k/8/juzWfbBjLLc6r/GjEssoinnzn15EQvE9tHUDwwj9xIb4Fy78nWYKj5ioKEFmeU/qOjId588w1xKOq8hoz1BeOtuiW1LiIESH6p7XCccwtu9QI8/elQiJ7I88DAJIu0WgCqng/hBBL25JbG9PaRT7HzoD0smPfMnsRgjlcGgPxhlooykqBD/3d1ISXBzcYUp+1iaJUU954NQIDAQAB"
 }

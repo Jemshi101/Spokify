@@ -1,4 +1,4 @@
-import { VOICES, loadSettings, saveSettings } from '../shared/settings';
+import { PIPER_VOICES, VOICES, loadSettings, saveSettings } from '../shared/settings';
 import { sortedSystemVoices, voiceLabel } from '../host/voices';
 import type { UiEvent } from '../shared/messages';
 
@@ -19,14 +19,20 @@ async function hasWebGPU() {
   }
 }
 
-async function fillVoices(lite: boolean) {
+type Family = 'kokoro' | 'piper' | 'system';
+
+async function fillVoices(family: Family) {
   const s = await loadSettings();
   const select = $<HTMLSelectElement>('voice');
-  if (lite) {
+  if (family === 'system') {
     const voices = await sortedSystemVoices();
     select.innerHTML = '<option value="">Best available English voice</option>' + voices.map((v) => `<option value="${v.voiceURI}">${voiceLabel(v)}</option>`).join('');
     if (s.systemVoice) select.value = s.systemVoice;
     select.onchange = () => saveSettings({ systemVoice: select.value });
+  } else if (family === 'piper') {
+    select.innerHTML = PIPER_VOICES.map((v) => `<option value="${v.id}">${v.label}</option>`).join('');
+    select.value = s.piperVoice;
+    select.onchange = () => saveSettings({ piperVoice: select.value });
   } else {
     select.innerHTML = VOICES.map((v) => `<option value="${v.id}">${v.label}</option>`).join('');
     select.value = s.voice;
@@ -37,38 +43,51 @@ async function fillVoices(lite: boolean) {
 async function init() {
   const gpu = await hasWebGPU();
   const s = await loadSettings();
-  const lite = !gpu || s.engine === 'system';
+  const family: Family = s.engine === 'system' ? 'system' : s.engine === 'piper' || (s.engine === 'auto' && !gpu) ? 'piper' : 'kokoro';
 
-  if (!gpu) {
-    $('engineText').textContent =
-      "This browser doesn't expose WebGPU, which the natural voices need to run smoothly. Spokify will use your system's built-in voices instead (lite mode). Highlighting and everything else work the same.";
-    note('engineNote', 'Lite mode is on. If you enable WebGPU later, switch the engine back to Auto in the toolbar popup.', 'warn');
-    if (s.engine === 'auto') await saveSettings({ engine: 'system' });
+  if (family === 'system') {
+    $('engineText').textContent = "Spokify is set to your system's built-in voices (lite mode). Pick Auto in the toolbar popup for natural voices.";
   } else {
-    $('engineText').textContent = 'The voice model downloads once and is cached. After that everything works offline.';
+    $('engineText').textContent =
+      family === 'piper'
+        ? "This browser has no WebGPU, so Spokify uses Piper: natural voices that run on the processor. Each voice downloads once (~63 MB) and is cached; then everything works offline."
+        : 'The Kokoro voice model downloads once (~330 MB) and is cached; then everything works offline. If your graphics turn out too slow for it, Spokify switches to the lighter Piper voices (~63 MB).';
+    $('get').textContent = family === 'piper' ? 'Download voice (~63 MB)' : 'Download voice (~330 MB)';
     $('download').hidden = false;
   }
-  await fillVoices(lite);
+  await fillVoices(family);
 
   $('get').onclick = async () => {
     $<HTMLButtonElement>('get').disabled = true;
     note('engineNote', 'Downloading…');
     await host({ type: 'warmup' });
+    let slowNoted = false;
     const poll = setInterval(async () => {
       const env = await host({ type: 'env' });
       const loaded = env?.worker?.loaded;
-      if (loaded) {
-        clearInterval(poll);
-        $('progress').style.width = '100%';
-        $('get').textContent = 'Voice ready';
-        if (s.engine === 'auto' && loaded.realtime != null && loaded.realtime < 1.3) {
-          // The host switches Auto to Lite voices for this computer (see SLOW_REALTIME in host.ts).
-          note('engineNote', `Your graphics ran the natural voice at ${loaded.realtime}× real time, too slow to keep up, so Spokify will use your system's voices (lite mode). You can still pick a Natural engine in the toolbar popup.`, 'warn');
-          await fillVoices(true);
-        } else {
-          note('engineNote', loaded.fallbackReason ? `Ready (CPU fallback: ${loaded.fallbackReason})` : `Ready · ${loaded.engine}${loaded.realtime ? ` · ${loaded.realtime}× real time` : ''}`, 'ok');
+      if (!loaded) return;
+      if (loaded.engine === 'webgpu-fp32' && s.engine === 'auto' && loaded.realtime != null && loaded.realtime < 1.3) {
+        // Too slow for Kokoro: the host now loads Piper; keep polling until it's ready.
+        if (!slowNoted) {
+          slowNoted = true;
+          $('progress').style.width = '0%';
+          note('engineNote', `Your graphics ran Kokoro at ${loaded.realtime}× real time, too slow to keep up. Getting the lighter Piper voice instead…`, 'warn');
+          await fillVoices('piper');
         }
+        return;
       }
+      clearInterval(poll);
+      $('progress').style.width = '100%';
+      $('get').textContent = 'Voice ready';
+      const name = loaded.engine === 'piper' ? 'Piper' : 'Kokoro';
+      if (loaded.engine === 'piper') await fillVoices('piper');
+      note(
+        'engineNote',
+        loaded.fallbackReason
+          ? `Ready · ${name} (WebGPU failed: ${loaded.fallbackReason})`
+          : `Ready · ${name}${loaded.realtime ? ` · ${loaded.realtime}× real time` : ''}${slowNoted ? ' (your graphics were too slow for Kokoro)' : ''}`,
+        'ok',
+      );
     }, 700);
   };
 
@@ -78,7 +97,7 @@ async function init() {
       type: 'speakSample',
       text: 'Hi! I can read any web page or PDF to you, and highlight each word as I go.',
     });
-    note('playNote', r?.error ? `Error: ${r.error}` : r?.engine === 'system' ? `Playing with ${r.voice}` : `Playing · generated ${r.speedVsRealtime}× faster than real time`, r?.error ? 'warn' : '');
+    note('playNote', r?.error ? `Error: ${r.error}` : r?.engine === 'system' ? `Playing with ${r.voice}` : `Playing · ${r.engine === 'piper' ? 'Piper' : 'Kokoro'} · generated ${r.speedVsRealtime}× faster than real time`, r?.error ? 'warn' : '');
   };
 }
 

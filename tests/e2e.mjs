@@ -38,6 +38,15 @@ const GDOC = `<html><head><meta content="text/html; charset=UTF-8" http-equiv="c
 <hr><div><p><a href="#ftnt_ref1" id="ftnt1">[1]</a><span>&nbsp;Docs draws text on a canvas, so we read the export.</span></p></div>
 <div><p><a href="#cmnt_ref1" id="cmnt1">[a]</a><span>Reviewer comment that must never be read aloud.</span></p></div>
 </body></html>`;
+// A list of entries (like GitHub releases) where the longest entry is the last one.
+const RELEASES = `<!doctype html><html><head><title>Releases</title></head><body><header><nav><a href="/">Home</a></nav></header>
+<main><h1>Releases</h1>
+${[
+  ['Version three', 'This newest release adds a jump button to the player. It also lets you change the voice while reading.'],
+  ['Version two', 'This release fixes the robotic voice on some computers. The default engine changed to a safer one.'],
+  ['Version one', 'The first release could read web pages aloud with natural voices, highlight each word as it was spoken, keep playing in the background, and remember where you stopped. It also had keyboard shortcuts, a floating player with speed control, and a right-click menu for reading a selection, a whole page or a linked PDF document.'],
+].map(([t, b]) => `<section class="release"><div class="box"><div class="box-body"><h2>${t}</h2><div class="markdown-body"><p>${b}</p></div></div></div></section>`).join('\n')}
+</main></body></html>`;
 const OTHER = '<!doctype html><title>Other</title><p>Another page.</p>';
 
 let pdfBytes = null;
@@ -48,6 +57,7 @@ const LONG_DOC = `<!doctype html><html><body style="margin:0;font:12pt serif;orp
 <p>${CROSS}</p><p>After that, a short closing sentence ends the document.</p></body></html>`;
 const server = http
   .createServer((req, res) => {
+    if (req.url === '/releases') return res.writeHead(200, { 'content-type': 'text/html' }).end(RELEASES);
     if (req.url === '/gdoc') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(GDOC);
     if (req.url === '/long.pdf') return res.writeHead(200, { 'content-type': 'application/pdf', 'access-control-allow-origin': '*' }).end(longPdfBytes);
     if (req.url === '/doc.pdf') return res.writeHead(200, { 'content-type': 'application/pdf', 'access-control-allow-origin': '*' }).end(pdfBytes);
@@ -214,7 +224,8 @@ try {
     check('player jumps back to the highlight', !!shown && !!back, `button shown ${!!shown}, clicked ${!!clicked}, back in view ${!!back}`);
 
     const opened = await clickInPlayer('button[data-a="voice"]');
-    const select = opened && (await inPlayer('.menu:not([hidden]) select'));
+    // The menu opens after asking the host what is speaking: wait for it.
+    const select = opened && (await waitFor(() => inPlayer('.menu:not([hidden]) select'), 5000));
     if (select) {
       await cdp.send('DOM.focus', { nodeId: select });
       await page.keyboard.press('ArrowDown');
@@ -292,13 +303,37 @@ try {
     await page.goto(`${base}/article`);
     await page.bringToFront();
     await call({ type: 'extract', mode: 'page', tabId });
-    const slowSt = await waitFor(async () => { const x = await status(); return x.engine === 'system' && x; }, 60000);
+    const slowSt = await waitFor(async () => { const x = await status(); return x.engine === 'piper' && x.sid != null && x; }, 90000);
     const flag = await ext.evaluate(async () => (await chrome.storage.local.get('gpuSlow')).gpuSlow);
-    check('Auto switches to Lite voices when the GPU is too slow', !!slowSt && !!flag?.realtime, `engine ${slowSt?.engine}, measured ${flag?.realtime}× real time`);
+    check('Auto switches to Piper when the GPU is too slow for Kokoro', !!slowSt && !!flag?.realtime, `engine ${slowSt?.engine} (${slowSt?.voice}), Kokoro measured ${flag?.realtime}× real time`);
     await call({ type: 'host', payload: { type: 'stop' } });
     await ext.evaluate(() => chrome.storage.local.remove(['testSlowRealtime', 'gpuSlow']));
   }
   await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+
+  // --- Piper (CPU voices): reads with word highlighting, faster than real time
+  {
+    await ext.evaluate(() => chrome.storage.local.remove('positions'));
+    await setSettings({ engine: 'piper', voice: 'af_heart', piperVoice: 'en_US-lessac-medium', speed: 1 });
+    await page.goto(`${base}/article`);
+    await page.bringToFront();
+    await call({ type: 'extract', mode: 'page', tabId });
+    const pw = new Set();
+    let ps;
+    const endP = Date.now() + 90000;
+    while (Date.now() < endP) {
+      const x = await state();
+      if (x.word) pw.add(`${x.sid}:${x.word}`);
+      if (pw.size >= 15) break;
+      await sleep(40);
+    }
+    ps = await status();
+    const rt = ps?.stats?.genMs ? ps.stats.audioSec / (ps.stats.genMs / 1000) : 0;
+    check('Piper reads with word highlighting', ps?.engine === 'piper' && pw.size >= 15, `${pw.size} words, voice ${ps?.voice}`);
+    check('Piper runs faster than real time on the CPU', rt > 2, `${rt.toFixed(1)}× real time`);
+    await call({ type: 'host', payload: { type: 'stop' } });
+    await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+  }
 
   // --- PDF viewer (PDF printed by Chrome from the test article)
   const pdfUrl = `${base}/doc.pdf`;
@@ -364,6 +399,17 @@ try {
   }
   check('Google Docs word highlighting advances', gdocWords.size >= 10, `${gdocWords.size} words`);
   await call({ type: 'host', payload: { type: 'stop' } });
+
+  // --- a page of repeated entries is read from the first entry, not just the longest one
+  {
+    const relSegs = segsOf();
+    await page.goto(`${base}/releases`);
+    await page.bringToFront();
+    await call({ type: 'extract', mode: 'page', tabId });
+    const rs = await Promise.race([relSegs, sleep(30000).then(() => [])]);
+    check('lists of entries (e.g. GitHub releases) are read from the first entry', rs[0] === 'Releases' && rs[1] === 'Version three' && rs.includes('Version one'), JSON.stringify(rs.slice(0, 3)));
+    await call({ type: 'host', payload: { type: 'stop' } });
+  }
 
   // --- welcome page
   const welcome = await browser.newPage();

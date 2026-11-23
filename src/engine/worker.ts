@@ -1,10 +1,12 @@
-// TTS engine: a module Web Worker inside the audio host. Loads Kokoro, generates audio + word timings.
+// TTS engine: a module Web Worker inside the audio host. Loads Kokoro (GPU) or a Piper voice (CPU)
+// and generates audio + word timings.
 import { KokoroTTS, env } from 'kokoro-js';
 import { env as hfEnv } from '@huggingface/transformers';
-import { ENGINES, type EngineChoice, type EngineId } from '../shared/settings';
+import { DEFAULT_PIPER_VOICE, ENGINES, PIPER_VOICES, type EngineChoice, type EngineId } from '../shared/settings';
 import type { LoadInfo } from '../shared/messages';
-import { phonemizeText, phonemizeWord } from './phonemize';
+import { phonemizeEspeak, phonemizeText, phonemizeWord } from './phonemize';
 import { alignPhonemes, positionsToTimes } from './align';
+import { PiperVoice, estimateWordTimes } from './piper';
 
 // Never load code from a CDN: ONNX Runtime's .mjs/.wasm ship inside the extension.
 env.wasmPaths = new URL('ort/', self.location.href).href;
@@ -23,6 +25,9 @@ let rawModel: (Model & { dispose(): Promise<void> }) | null = null;
 let loaded: LoadInfo | null = null;
 let loading: Promise<LoadInfo> | null = null;
 let lastOutputs: Record<string, { data: ArrayLike<number | bigint> }> | null = null;
+let piper: PiperVoice | null = null;
+
+const isPiperVoice = (v?: string) => !!v && PIPER_VOICES.some((p) => p.id === v);
 
 const post = (msg: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
 
@@ -38,13 +43,25 @@ function hasWebGPU(): Promise<boolean> {
   return gpuCheck;
 }
 
-async function loadEngine(engine: EngineId): Promise<void> {
+/** One model in memory at a time: switching families frees the other one. */
+async function disposeAll() {
   if (rawModel) {
     try { await rawModel.dispose(); } catch {}
   }
+  await piper?.dispose();
   tts = null;
   rawModel = null;
+  piper = null;
   loaded = null;
+}
+
+async function loadPiper(voice: string): Promise<void> {
+  await disposeAll();
+  piper = await PiperVoice.load(voice, (file, loaded, total) => post({ type: 'progress', file, loaded, total }));
+}
+
+async function loadEngine(engine: EngineId): Promise<void> {
+  await disposeAll();
   const instance = await KokoroTTS.from_pretrained(MODEL_ID, {
     device: ENGINES[engine].device,
     dtype: ENGINES[engine].dtype,
@@ -75,28 +92,40 @@ async function dropUnusedModels() {
 
 const CALIBRATION = 'This short sentence measures how quickly your computer can speak.';
 
-/** Frees the model (and its GPU memory), e.g. when the host switches to Lite voices. */
+/** Frees the model (and its GPU memory), e.g. when the host switches engines. */
 async function unload() {
-  if (rawModel) {
-    try { await rawModel.dispose(); } catch {}
-  }
-  tts = null;
-  rawModel = null;
-  loaded = null;
+  await disposeAll();
   return { ok: true };
 }
 
-async function load({ engine = 'auto' }: { engine?: EngineChoice }): Promise<LoadInfo> {
+async function load({ engine = 'auto', voice }: { engine?: EngineChoice; voice?: string }): Promise<LoadInfo> {
   const gpu = await hasWebGPU();
-  // fp32 on WebGPU. fp16 is faster but its decoder output is garbled (robotic, unintelligible).
-  const target: EngineId = engine in ENGINES ? (engine as EngineId) : gpu ? 'webgpu-fp32' : 'wasm-q8';
-  if (loaded && loaded.engine === target) return { ...loaded, cached: true };
+  // Kokoro fp32 on WebGPU (fp16 is faster but garbled); without WebGPU, Piper on the CPU.
+  const target: EngineId = engine in ENGINES ? (engine as EngineId) : gpu ? 'webgpu-fp32' : 'piper';
+  const piperVoice = isPiperVoice(voice) ? voice! : (piper?.id ?? DEFAULT_PIPER_VOICE);
+  const ready = () => loaded && loaded.engine === target && (target !== 'piper' || loaded.voice === piperVoice || !isPiperVoice(voice));
+  if (ready()) return { ...loaded!, cached: true };
   if (loading) await loading.catch(() => {});
-  if (loaded && loaded.engine === target) return { ...loaded, cached: true };
+  if (ready()) return { ...loaded!, cached: true };
+
+  if (target === 'piper') {
+    loading = (async () => {
+      const t0 = performance.now();
+      await loadPiper(piperVoice);
+      const r = await synthPiper(CALIBRATION, [], 1);
+      loaded = { engine: 'piper', voice: piperVoice, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, realtime: +(r.audioSec / (r.genMs / 1000)).toFixed(2) };
+      return loaded;
+    })();
+    try {
+      return await loading;
+    } finally {
+      loading = null;
+    }
+  }
 
   loading = (async () => {
     const t0 = performance.now();
-    let used = target;
+    let used: EngineId = target;
     let fallbackReason: string | undefined;
     let realtime: number | undefined;
     try {
@@ -111,11 +140,12 @@ async function load({ engine = 'auto' }: { engine?: EngineChoice }): Promise<Loa
       }
     } catch (e) {
       if (ENGINES[target].device !== 'webgpu') throw e;
+      // WebGPU failed: Piper on the CPU is the light fallback (Kokoro on the CPU is too slow).
       fallbackReason = String((e as Error)?.message ?? e);
-      used = 'wasm-q8';
-      await loadEngine(used);
+      used = 'piper';
+      await loadPiper(DEFAULT_PIPER_VOICE);
     }
-    loaded = { engine: used, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, fallbackReason, realtime: used === target ? realtime : undefined };
+    loaded = { engine: used, voice: used === 'piper' ? DEFAULT_PIPER_VOICE : undefined, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, fallbackReason, realtime: used === target ? realtime : undefined };
     dropUnusedModels();
     return loaded;
   })();
@@ -152,9 +182,29 @@ async function synth(text: string, words: string[], voice: string, speed: number
   return { samples, sampleRate: audio.sampling_rate, audioSec, genMs: Math.round(genMs), wordTimes, exact };
 }
 
+/** Piper: espeak phonemes → audio; word times estimated from the phoneme alignment. */
+async function synthPiper(text: string, words: string[], speed: number) {
+  if (!piper) throw new Error('Engine not loaded');
+  const lang = piper.espeakVoice;
+  const ps = await phonemizeEspeak(text, lang);
+  const t0 = performance.now();
+  const { samples, sampleRate } = await piper.synthesize(ps, speed);
+  const genMs = performance.now() - t0;
+  const audioSec = samples.length / sampleRate;
+  let wordTimes: number[] = [];
+  if (words.length) {
+    const wordPs = await Promise.all(words.map((w) => phonemizeWord(w, lang)));
+    wordTimes = estimateWordTimes(alignPhonemes(wordPs, ps).wordStarts, ps, audioSec);
+  }
+  return { samples, sampleRate, audioSec, genMs: Math.round(genMs), wordTimes, exact: false };
+}
+
+const synthWith = (engine: EngineId, text: string, words: string[], voice: string, speed: number) =>
+  engine === 'piper' ? synthPiper(text, words, speed) : synth(text, words, voice, speed);
+
 async function generate(p: { text: string; words: string[]; voice: string; speed: number; engine: EngineChoice }) {
-  const info = await load({ engine: p.engine });
-  return { ...(await synth(p.text, p.words, p.voice, p.speed)), engine: info.engine, realtime: info.realtime };
+  const info = await load({ engine: p.engine, voice: p.voice });
+  return { ...(await synthWith(info.engine, p.text, p.words, p.voice, p.speed)), engine: info.engine, voice: info.voice, realtime: info.realtime };
 }
 
 const BENCH = [
@@ -168,7 +218,7 @@ async function benchmark({ engine }: { engine: EngineId }) {
   let genMs = 0;
   let audioSec = 0;
   for (const text of BENCH) {
-    const r = await synth(text, [], 'af_heart', 1);
+    const r = await synthWith(info.engine, text, [], 'af_heart', 1);
     genMs += r.genMs;
     audioSec += r.audioSec;
   }
