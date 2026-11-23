@@ -18,7 +18,7 @@ const TEXTS = [
 ];
 const SEQ = Array.from({ length: 24 }, (_, i) => `Sentence number ${i + 1} is here, and it talks about the weather, the news, and a small cat that sleeps all day.`);
 
-const opts = { headless: true, pipe: true, protocolTimeout: 1800000, enableExtensions: [path.resolve('dist')], args: ['--enable-unsafe-webgpu'] };
+const opts = { headless: true, pipe: true, protocolTimeout: 1800000, enableExtensions: [path.resolve('dist')], args: ['--mute-audio', '--enable-unsafe-webgpu'] };
 if (which === 'opera') Object.assign(opts, { executablePath: '/Applications/Opera.app/Contents/MacOS/Opera', userDataDir: path.resolve('.e2e-opera') });
 else opts.userDataDir = path.resolve('.e2e-profile');
 const browser = await puppeteer.launch(opts);

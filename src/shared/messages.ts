@@ -22,7 +22,7 @@ export type TabEvent =
 /** Commands the host understands. */
 export type HostCommand =
   | { type: 'ping' }
-  | { type: 'machine'; gpuSlow?: { realtime: number; at: number } | null; testSlowRealtime?: number }
+  | { type: 'machine'; gpuSlow?: { realtime: number; at: number } | null; testSlowRealtime?: number; testMute?: boolean }
   | { type: 'warmup'; settings: Settings }
   | { type: 'read'; tabId: number; segments: SpeechSegment[]; settings: Settings; startAt?: number; title?: string }
   | { type: 'settings'; settings: Settings }

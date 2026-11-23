@@ -67,7 +67,7 @@ const browser = await puppeteer.launch({
   pipe: true,
   userDataDir: path.resolve('.e2e-profile'), // keeps the downloaded model cached between runs
   enableExtensions: [path.resolve('dist')],
-  args: ['--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required'],
+  args: ['--mute-audio', '--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required'],
 });
 
 try {
@@ -94,6 +94,7 @@ try {
   };
 
   await ext.evaluate(() => chrome.storage.local.remove('positions'));
+  await ext.evaluate(() => chrome.storage.local.set({ testMute: true })); // keep the run silent
   await setSettings({ engine, voice: 'af_heart', speed: 1.5 });
   const info = await call({ type: 'hostInfo' });
   check('audio host starts as offscreen document', info.host?.kind === 'offscreen', JSON.stringify(info));

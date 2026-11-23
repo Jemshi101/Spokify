@@ -21,9 +21,12 @@ const SLOW_REALTIME = 1.3;
  */
 let gpuSlow: { realtime: number; at: number } | null = null;
 let slowLimit = SLOW_REALTIME;
-function applyMachine(m: { gpuSlow?: typeof gpuSlow; testSlowRealtime?: number }) {
+/** Tests set this so runs stay silent (system voices bypass the browser's --mute-audio on macOS). */
+let testMute = false;
+function applyMachine(m: { gpuSlow?: typeof gpuSlow; testSlowRealtime?: number; testMute?: boolean }) {
   gpuSlow = m.gpuSlow ?? null;
   slowLimit = typeof m.testSlowRealtime === 'number' ? m.testSlowRealtime : SLOW_REALTIME;
+  testMute = !!m.testMute;
 }
 const gpuSlowLoaded = chrome.runtime.sendMessage({ target: 'sw', type: 'machineState' }).then(applyMachine, () => {});
 
@@ -319,6 +322,7 @@ async function speakSystem(s: Session, fromWord: number) {
     u.lang = 'en-US';
   }
   u.rate = s.settings.speed;
+  if (testMute) u.volume = 0;
   const stale = () => session !== s || s.utter !== u;
   u.onstart = () => {
     if (stale()) return;
@@ -484,6 +488,7 @@ async function speakSample({ text, settings }: { text: string; settings: Setting
     const v = await pickSystemVoice(settings.systemVoice);
     if (v) u.voice = v;
     u.rate = settings.speed;
+    if (testMute) u.volume = 0;
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
     return { engine: 'system', voice: v?.name ?? 'default' };

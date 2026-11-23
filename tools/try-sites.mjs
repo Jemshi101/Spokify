@@ -4,7 +4,7 @@ import puppeteer from 'puppeteer';
 import path from 'node:path';
 
 const urls = process.argv.slice(2);
-const browser = await puppeteer.launch({ headless: true, pipe: true, protocolTimeout: 90000, enableExtensions: [path.resolve('dist')] });
+const browser = await puppeteer.launch({ headless: true, pipe: true, protocolTimeout: 90000, enableExtensions: [path.resolve('dist')], args: ['--mute-audio'] });
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`${what} timed out after ${ms / 1000}s`)), ms))]);
 try {
   const sw = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('sw.js'));

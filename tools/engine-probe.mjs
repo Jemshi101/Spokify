@@ -11,7 +11,7 @@ const opts = {
   protocolTimeout: 600000,
   userDataDir: path.resolve(S, `probe-${which}`),
   enableExtensions: [path.resolve('dist')],
-  args: ['--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required', '--no-first-run'],
+  args: ['--mute-audio', '--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required', '--no-first-run'],
 };
 if (which === 'opera') opts.executablePath = '/Applications/Opera.app/Contents/MacOS/Opera';
 const browser = await puppeteer.launch(opts);

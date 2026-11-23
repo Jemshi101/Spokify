@@ -178,7 +178,7 @@ const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) 
   // The audio host can't use chrome.storage (offscreen document): it reads and saves the
   // per-computer "GPU too slow" flag through these.
   async machineState() {
-    return chrome.storage.local.get(['gpuSlow', 'testSlowRealtime']);
+    return chrome.storage.local.get(['gpuSlow', 'testSlowRealtime', 'testMute']);
   },
   async saveMachine(msg) {
     await chrome.storage.local.set({ gpuSlow: msg.gpuSlow });
@@ -202,9 +202,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Settings changed in the popup or floating player: apply to the running session.
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area === 'sync' && changes.settings) toHostIfRunning({ type: 'settings', settings: await loadSettings() });
-  if (area === 'local' && (changes.gpuSlow || changes.testSlowRealtime)) {
-    const { gpuSlow, testSlowRealtime } = await chrome.storage.local.get(['gpuSlow', 'testSlowRealtime']);
-    toHostIfRunning({ type: 'machine', gpuSlow: gpuSlow as { realtime: number; at: number } | null, testSlowRealtime: testSlowRealtime as number | undefined });
+  if (area === 'local' && (changes.gpuSlow || changes.testSlowRealtime || changes.testMute)) {
+    const { gpuSlow, testSlowRealtime, testMute } = await chrome.storage.local.get(['gpuSlow', 'testSlowRealtime', 'testMute']);
+    toHostIfRunning({
+      type: 'machine',
+      gpuSlow: gpuSlow as { realtime: number; at: number } | null,
+      testSlowRealtime: testSlowRealtime as number | undefined,
+      testMute: testMute as boolean | undefined,
+    });
   }
 });
 
