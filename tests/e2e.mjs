@@ -4,6 +4,7 @@ import puppeteer from 'puppeteer';
 import http from 'node:http';
 import path from 'node:path';
 import { spectralSimilarity } from './audio.mjs';
+import { freshExtensionScripts } from './profile.mjs';
 
 const arg = (name, def) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1] ?? def;
 const engine = arg('engine', 'auto');
@@ -89,7 +90,7 @@ const check = (name, ok, detail = '') => {
 const browser = await puppeteer.launch({
   headless: true,
   pipe: true,
-  userDataDir: path.resolve('.e2e-profile'), // keeps the downloaded model cached between runs
+  userDataDir: freshExtensionScripts(path.resolve('.e2e-profile')), // keeps downloaded models cached between runs
   enableExtensions: [path.resolve('dist')],
   args: ['--mute-audio', '--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required'],
 });
@@ -250,6 +251,49 @@ try {
     await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
   }
 
+  // --- select text → a Read button appears next to it → only the selection is read
+  {
+    const cdp = await page.createCDPSession();
+    const inShadow = async (selector) => {
+      const { root } = await cdp.send('DOM.getDocument', { depth: -1, pierce: true });
+      const shadows = [];
+      const walk = (n) => { for (const s of n.shadowRoots ?? []) shadows.push(s); for (const c of n.children ?? []) walk(c); };
+      walk(root);
+      for (const s of shadows) {
+        const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: s.nodeId, selector }).catch(() => ({ nodeId: 0 }));
+        if (nodeId) return nodeId;
+      }
+      return 0;
+    };
+    const boxOf = async (nodeId) => (nodeId ? (await cdp.send('DOM.getBoxModel', { nodeId }).catch(() => null))?.model.content : null);
+    const segsNext = () =>
+      ext.evaluate(() => new Promise((ok) => chrome.runtime.onMessage.addListener(function l(m) {
+        if (m.target === 'host' && m.type === 'read') { chrome.runtime.onMessage.removeListener(l); ok(m.segments.map((s) => s.text)); }
+      })));
+    await setSettings({ engine: 'system', voice: 'af_heart', speed: 2 });
+    await page.goto(`${base}/article`);
+    await page.bringToFront();
+    // Triple-click selects the whole paragraph, like a user would.
+    const para = await page.$('main .content p:nth-of-type(5)');
+    await para.click({ count: 3 });
+    const btn = await waitFor(async () => { const q = await boxOf(await inShadow('button[aria-label="Read the selection aloud"]')); return q && q[2] - q[0] > 0 && q; }, 3000);
+    const sel1 = segsNext();
+    if (btn) await page.mouse.click((btn[0] + btn[4]) / 2, (btn[1] + btn[5]) / 2);
+    const picked = btn ? await Promise.race([sel1, sleep(10000).then(() => [])]) : [];
+    check('selecting text shows a Read button that reads just the selection', !!btn && picked.length === 2 && picked[0].startsWith('Reading along also helps'), JSON.stringify(picked));
+    await call({ type: 'host', payload: { type: 'stop' } });
+
+    // The shortcut (extract mode 'auto') reads the selection when there is one.
+    await para.click({ count: 3 });
+    const sel2 = segsNext();
+    await call({ type: 'extract', mode: 'auto', tabId });
+    const viaKey = await Promise.race([sel2, sleep(10000).then(() => [])]);
+    check('the shortcut reads the selection when text is selected', viaKey.length === 2 && viaKey[0].startsWith('Reading along also helps'), JSON.stringify(viaKey));
+    await call({ type: 'host', payload: { type: 'stop' } });
+    await page.evaluate(() => getSelection().removeAllRanges());
+    await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+  }
+
   // --- stop on navigation
   await page.bringToFront();
   await call({ type: 'extract', mode: 'page', tabId });
@@ -312,18 +356,42 @@ try {
     // --- Auto on a GPU too slow for natural voices switches to Lite voices and remembers it.
     // This GPU is fast, so the test raises the bar (testSlowRealtime) instead.
     await ext.evaluate(() => chrome.storage.local.set({ testSlowRealtime: 100 }));
-    await ext.evaluate(() => chrome.storage.local.remove(['gpuSlow', 'positions']));
+    await ext.evaluate(() => chrome.storage.local.remove(['gpuSlow', 'stSlow', 'positions']));
     await setSettings({ engine: 'auto', voice: 'af_heart', speed: 1.5 });
     await page.goto(`${base}/article`);
     await page.bringToFront();
     await call({ type: 'extract', mode: 'page', tabId });
-    const slowSt = await waitFor(async () => { const x = await status(); return x.engine === 'piper' && x.sid != null && x; }, 90000);
-    const flag = await ext.evaluate(async () => (await chrome.storage.local.get('gpuSlow')).gpuSlow);
-    check('Auto switches to Piper when the GPU is too slow for Kokoro', !!slowSt && !!flag?.realtime, `engine ${slowSt?.engine} (${slowSt?.voice}), Kokoro measured ${flag?.realtime}× real time`);
+    const slowSt = await waitFor(async () => { const x = await status(); return x.engine === 'piper' && x.sid != null && x; }, 240000);
+    const flags = await ext.evaluate(async () => chrome.storage.local.get(['gpuSlow', 'stSlow']));
+    check('Auto steps down Kokoro → Supertonic → Piper when each is too slow', !!slowSt && !!flags.gpuSlow?.realtime && !!flags.stSlow?.realtime,
+      `engine ${slowSt?.engine} (${slowSt?.voice}); Kokoro measured ${flags.gpuSlow?.realtime}×, Supertonic ${flags.stSlow?.realtime}× real time`);
     await call({ type: 'host', payload: { type: 'stop' } });
-    await ext.evaluate(() => chrome.storage.local.remove(['testSlowRealtime', 'gpuSlow']));
+    await ext.evaluate(() => chrome.storage.local.remove(['testSlowRealtime', 'gpuSlow', 'stSlow']));
   }
   await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+
+  // --- Supertonic (CPU): reads with word highlighting, faster than real time
+  {
+    await ext.evaluate(() => chrome.storage.local.remove('positions'));
+    await setSettings({ engine: 'supertonic', voice: 'af_heart', supertonicVoice: 'F1', speed: 1 });
+    await page.goto(`${base}/article`);
+    await page.bringToFront();
+    await call({ type: 'extract', mode: 'page', tabId });
+    const sw2 = new Set();
+    const endS = Date.now() + 180000;
+    while (Date.now() < endS) {
+      const x = await state();
+      if (x.word) sw2.add(`${x.sid}:${x.word}`);
+      if (sw2.size >= 15) break;
+      await sleep(40);
+    }
+    const ss = await status();
+    const srt = ss?.stats?.genMs ? ss.stats.audioSec / (ss.stats.genMs / 1000) : 0;
+    check('Supertonic reads with word highlighting', ss?.engine === 'supertonic' && sw2.size >= 15, `${sw2.size} words, voice ${ss?.voice}`);
+    check('Supertonic runs faster than real time on the CPU', srt > 2, `${srt.toFixed(1)}× real time`);
+    await call({ type: 'host', payload: { type: 'stop' } });
+    await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+  }
 
   // --- Piper (CPU voices): reads with word highlighting, faster than real time
   {

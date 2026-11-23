@@ -20,11 +20,14 @@ const SLOW_REALTIME = 1.3;
  * `slowLimit` lets tests raise the bar on fast machines.
  */
 let gpuSlow: { realtime: number; at: number } | null = null;
+/** Same for Supertonic on the CPU: Auto then uses Piper, which is lighter still. */
+let stSlow: { realtime: number; at: number } | null = null;
 let slowLimit = SLOW_REALTIME;
 /** Tests set this so runs stay silent (system voices bypass the browser's --mute-audio on macOS). */
 let testMute = false;
-function applyMachine(m: { gpuSlow?: typeof gpuSlow; testSlowRealtime?: number; testMute?: boolean }) {
+function applyMachine(m: { gpuSlow?: typeof gpuSlow; stSlow?: typeof stSlow; testSlowRealtime?: number; testMute?: boolean }) {
   gpuSlow = m.gpuSlow ?? null;
+  stSlow = m.stSlow ?? null;
   slowLimit = typeof m.testSlowRealtime === 'number' ? m.testSlowRealtime : SLOW_REALTIME;
   testMute = !!m.testMute;
 }
@@ -83,12 +86,19 @@ async function resolveKind(settings: Settings): Promise<'kokoro' | 'system'> {
   return 'kokoro'; // a neural engine: Kokoro or Piper (see neuralTarget)
 }
 
-/** The neural engine and voice to use: Kokoro on a fast GPU, else Piper on the CPU. */
+/** The neural engine and voice to use: Kokoro on a fast GPU, else Supertonic on a fast CPU, else Piper. */
 async function neuralTarget(settings: Settings): Promise<{ engine: EngineId; voice: string }> {
   await gpuSlowLoaded;
   const engine: EngineId =
-    settings.engine in ENGINES ? (settings.engine as EngineId) : (await hasWebGPU()) && !gpuSlow ? 'webgpu-fp32' : 'piper';
-  return { engine, voice: engine === 'piper' ? settings.piperVoice : settings.voice };
+    settings.engine in ENGINES
+      ? (settings.engine as EngineId)
+      : (await hasWebGPU()) && !gpuSlow
+        ? 'webgpu-fp32'
+        : !stSlow
+          ? 'supertonic'
+          : 'piper';
+  const voice = engine === 'piper' ? settings.piperVoice : engine === 'supertonic' ? settings.supertonicVoice : settings.voice;
+  return { engine, voice };
 }
 
 // ---------- session ----------
@@ -218,8 +228,8 @@ async function pump(s: Session) {
       const r = await rpc('generate', { text: seg.text, words: seg.words, voice: target.voice, speed: modelSpeed, engine: target.engine });
       if (session !== s) return;
       s.engine = r.engine;
-      s.voiceName = r.engine === 'piper' ? (r.voice ?? target.voice) : target.voice;
-      if (await tooSlow(s.settings, r.engine, r.realtime)) return void switchToPiper(s, r.realtime);
+      s.voiceName = r.voice ?? target.voice;
+      if (await tooSlow(s.settings, r.engine, r.realtime)) return void switchEngine(s, r.engine, r.realtime);
       if (epoch !== s.epoch || i < s.idx) continue;
       s.clips.set(i, { url: URL.createObjectURL(floatWav(r.samples, r.sampleRate)), audioSec: r.audioSec, wordTimes: r.wordTimes, exact: r.exact, modelSpeed });
       s.stats.generated++;
@@ -246,22 +256,32 @@ async function pump(s: Session) {
   }
 }
 
-/** True (and remembered, and the GPU model freed) when Auto's GPU measured too slow for Kokoro. */
+/**
+ * True (and remembered, and the model freed) when Auto measured this computer too slow for the
+ * engine it just loaded: Kokoro on the GPU, or Supertonic on the CPU. Piper is the floor.
+ */
 async function tooSlow(settings: Settings, engine: EngineId | undefined, realtime: number | undefined): Promise<boolean> {
   await gpuSlowLoaded;
-  if (settings.engine !== 'auto' || engine !== 'webgpu-fp32' || realtime == null || realtime >= slowLimit) return false;
-  gpuSlow = { realtime, at: Date.now() };
-  await chrome.runtime.sendMessage({ target: 'sw', type: 'saveMachine', gpuSlow }).catch(() => {});
+  if (settings.engine !== 'auto' || realtime == null || realtime >= slowLimit) return false;
+  if (engine !== 'webgpu-fp32' && engine !== 'supertonic') return false;
+  const flag = { realtime, at: Date.now() };
+  if (engine === 'webgpu-fp32') gpuSlow = flag;
+  else stSlow = flag;
+  await chrome.runtime
+    .sendMessage({ target: 'sw', type: 'saveMachine', patch: engine === 'webgpu-fp32' ? { gpuSlow } : { stSlow } })
+    .then((r) => r?.error && console.warn('Saving the speed check failed:', r.error), (e) => console.warn('Saving the speed check failed:', e));
   rpc('unload').catch(() => {});
   return true;
 }
 
-/** Auto found the GPU too slow for Kokoro: continue this sentence with Piper on the CPU. */
-async function switchToPiper(s: Session, realtime: number) {
+/** Auto found this engine too slow here: continue this sentence with the next lighter one. */
+async function switchEngine(s: Session, slowEngine: EngineId, realtime: number) {
   if (session !== s) return;
   const { tabId, segments, idx, title, settings } = s;
   await read({ tabId, segments, settings, startAt: idx, title }, true);
-  if (session) emit(session, { type: 'notice', message: `Graphics too slow for Kokoro (${realtime}× real time). Using Piper voices.` });
+  const next = (await neuralTarget(settings)).engine === 'supertonic' ? 'Supertonic' : 'Piper';
+  const what = slowEngine === 'webgpu-fp32' ? 'Graphics too slow for Kokoro' : 'Processor too slow for Supertonic';
+  if (session) emit(session, { type: 'notice', message: `${what} (${realtime}× real time). Using ${next} voices.` });
 }
 
 function playClip(s: Session) {
@@ -452,6 +472,7 @@ async function applySettings(next: Settings) {
   const needsRegen =
     prev.voice !== next.voice ||
     prev.piperVoice !== next.piperVoice ||
+    prev.supertonicVoice !== next.supertonicVoice ||
     prev.engine !== next.engine ||
     splitSpeed(prev.speed).modelSpeed !== splitSpeed(next.speed).modelSpeed;
   if (needsRegen) {
@@ -526,12 +547,12 @@ const actions: Record<HostCommand['type'], (m: any) => unknown> = {
     if ((await resolveKind(m.settings)) === 'kokoro') {
       // Load (and download) the voice now. If Auto finds the GPU too slow, get Piper ready instead.
       const t = await neuralTarget(m.settings);
-      rpc('load', t).then(
-        async (info) => {
-          if (await tooSlow(m.settings, info?.engine, info?.realtime)) rpc('load', await neuralTarget(m.settings)).catch(() => {});
-        },
-        () => {},
-      );
+      // Each step down (Kokoro → Supertonic → Piper) loads the next engine and measures it too.
+      const loadNext = async (t: { engine: EngineId; voice: string }): Promise<void> => {
+        const info: LoadInfo | undefined = await rpc('load', t).catch(() => undefined);
+        if (await tooSlow(m.settings, info?.engine, info?.realtime)) await loadNext(await neuralTarget(m.settings));
+      };
+      loadNext(t);
     }
     return { ok: true };
   },
@@ -547,6 +568,7 @@ const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   status,
   env: async () => ({
     host: {
+      stSlow,
       crossOriginIsolated: self.crossOriginIsolated,
       webgpu: await hasWebGPU(),
       systemVoices: (await systemVoices()).length,

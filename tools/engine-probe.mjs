@@ -3,13 +3,14 @@
 import puppeteer from 'puppeteer';
 import fs from 'node:fs';
 import path from 'node:path';
+import { freshExtensionScripts } from '../tests/profile.mjs';
 const which = process.argv[2] ?? 'chrome';
 const S = process.env.OUT ?? '.';
 const opts = {
   headless: !process.argv.includes('--headful'),
   pipe: true,
   protocolTimeout: 600000,
-  userDataDir: path.resolve(S, `probe-${which}`),
+  userDataDir: freshExtensionScripts(path.resolve(S, `probe-${which}`)),
   enableExtensions: [path.resolve('dist')],
   args: ['--mute-audio', '--enable-unsafe-webgpu', '--autoplay-policy=no-user-gesture-required', '--no-first-run'],
 };

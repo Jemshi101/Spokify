@@ -2,7 +2,8 @@
 // highlighting, word timing, the floating player, and resume-where-you-left-off.
 import type { Sentence } from './extract';
 import { Player } from './player';
-import { PIPER_VOICES, VOICES, loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
+import { SelectionButton } from './selectionButton';
+import { PIPER_VOICES, SUPERTONIC_VOICES, VOICES, loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
 import { sortedSystemVoices, voiceLabel } from '../host/voices';
 import type { SpeechSegment, TabEvent } from '../shared/messages';
 import { loadPosition, savePosition, clearPosition } from './positions';
@@ -16,7 +17,10 @@ export interface ReaderOptions {
   tabId?: number;
 }
 
-type ExtractCmd = { type: 'extract'; mode: 'page' | 'selection' };
+/** 'auto' (the keyboard shortcut): the selection if there is one, else the page. */
+type ExtractCmd = { type: 'extract'; mode: 'page' | 'selection' | 'auto' };
+
+const hasSelection = () => (getSelection()?.toString().trim().length ?? 0) >= 3;
 
 export function createReader(opts: ReaderOptions) {
   const hasHighlights = typeof CSS !== 'undefined' && 'highlights' in CSS;
@@ -40,7 +44,10 @@ export function createReader(opts: ReaderOptions) {
     voiceMenu: async () => {
       // Offer the voices of whatever is speaking: Lite (system voices) or the natural voices.
       const [st, s] = await Promise.all([send({ type: 'host', payload: { type: 'status' } }).catch(() => null), loadSettings()]);
-      family = st?.engine === 'system' ? 'system' : st?.engine === 'piper' ? 'piper' : 'kokoro';
+      family = st?.engine === 'system' ? 'system' : st?.engine === 'piper' ? 'piper' : st?.engine === 'supertonic' ? 'supertonic' : 'kokoro';
+      if (family === 'supertonic') {
+        return { title: 'Supertonic voices (CPU)', current: s.supertonicVoice, options: SUPERTONIC_VOICES.map((v) => ({ value: v.id, label: v.label })) };
+      }
       if (family === 'piper') {
         return { title: 'Piper voices (CPU)', current: s.piperVoice, options: PIPER_VOICES.map((v) => ({ value: v.id, label: v.label })) };
       }
@@ -54,11 +61,22 @@ export function createReader(opts: ReaderOptions) {
       }
       return { title: 'Kokoro voices', current: s.voice, options: VOICES.map((v) => ({ value: v.id, label: v.label })) };
     },
-    onVoice: (value) => saveSettings(family === 'system' ? { systemVoice: value } : family === 'piper' ? { piperVoice: value } : { voice: value }),
+    onVoice: (value) =>
+      saveSettings(
+        family === 'system' ? { systemVoice: value } : family === 'piper' ? { piperVoice: value } : family === 'supertonic' ? { supertonicVoice: value } : { voice: value },
+      ),
   });
-  let family: 'kokoro' | 'piper' | 'system' = 'kokoro';
-  loadSettings().then((s) => player.setSpeed(s.speed));
-  onSettingsChanged((s) => player.setSpeed(s.speed));
+  let family: 'kokoro' | 'supertonic' | 'piper' | 'system' = 'kokoro';
+  const selectionButton = new SelectionButton(() => start(opts.extract('selection'), false));
+  loadSettings().then((s) => {
+    player.setSpeed(s.speed);
+    selectionButton.enabled = s.selectionButton;
+  });
+  onSettingsChanged((s) => {
+    player.setSpeed(s.speed);
+    selectionButton.enabled = s.selectionButton;
+    if (!s.selectionButton) selectionButton.hide();
+  });
 
   const style = document.createElement('style');
   style.textContent = `
@@ -204,9 +222,12 @@ export function createReader(opts: ReaderOptions) {
 
   function handle(msg: TabEvent | ExtractCmd, respond: (r: unknown) => void): boolean | void {
     switch (msg.type) {
-      case 'extract':
-        start(opts.extract(msg.mode), msg.mode === 'page').then(respond);
+      case 'extract': {
+        const mode = msg.mode === 'auto' ? (hasSelection() ? 'selection' : 'page') : msg.mode;
+        selectionButton.hide();
+        start(opts.extract(mode), mode === 'page').then(respond);
         return true;
+      }
       case 'sentence':
         player.setPaused(false);
         onSentence(msg);

@@ -1,12 +1,13 @@
-// TTS engine: a module Web Worker inside the audio host. Loads Kokoro (GPU) or a Piper voice (CPU)
-// and generates audio + word timings.
+// TTS engine: a module Web Worker inside the audio host. Loads Kokoro (GPU), Supertonic (CPU) or a
+// Piper voice (CPU) and generates audio + word timings.
 import { KokoroTTS, env } from 'kokoro-js';
 import { env as hfEnv } from '@huggingface/transformers';
-import { DEFAULT_PIPER_VOICE, ENGINES, PIPER_VOICES, type EngineChoice, type EngineId } from '../shared/settings';
+import { DEFAULT_PIPER_VOICE, DEFAULT_SUPERTONIC_VOICE, ENGINES, PIPER_VOICES, SUPERTONIC_VOICES, type EngineChoice, type EngineId } from '../shared/settings';
 import type { LoadInfo } from '../shared/messages';
 import { phonemizeEspeak, phonemizeText, phonemizeWord } from './phonemize';
 import { alignPhonemes, positionsToTimes } from './align';
 import { PiperVoice, estimateWordTimes } from './piper';
+import { SupertonicVoice, wordOffsets } from './supertonic';
 
 // Never load code from a CDN: ONNX Runtime's .mjs/.wasm ship inside the extension.
 env.wasmPaths = new URL('ort/', self.location.href).href;
@@ -26,6 +27,10 @@ let loaded: LoadInfo | null = null;
 let loading: Promise<LoadInfo> | null = null;
 let lastOutputs: Record<string, { data: ArrayLike<number | bigint> }> | null = null;
 let piper: PiperVoice | null = null;
+let supertonic: SupertonicVoice | null = null;
+/** Supertonic 2: 8.4× real time on an M1 CPU at the reference 8 steps (v3 managed 1.3×). */
+const SUPERTONIC_VERSION = 2;
+const SUPERTONIC_STEPS = 8;
 
 const isPiperVoice = (v?: string) => !!v && PIPER_VOICES.some((p) => p.id === v);
 
@@ -49,10 +54,17 @@ async function disposeAll() {
     try { await rawModel.dispose(); } catch {}
   }
   await piper?.dispose();
+  await supertonic?.dispose();
   tts = null;
   rawModel = null;
   piper = null;
+  supertonic = null;
   loaded = null;
+}
+
+async function loadSupertonic(): Promise<void> {
+  await disposeAll();
+  supertonic = await SupertonicVoice.load(SUPERTONIC_VERSION, (file, loaded, total) => post({ type: 'progress', file, loaded, total }));
 }
 
 async function loadPiper(voice: string): Promise<void> {
@@ -100,13 +112,29 @@ async function unload() {
 
 async function load({ engine = 'auto', voice }: { engine?: EngineChoice; voice?: string }): Promise<LoadInfo> {
   const gpu = await hasWebGPU();
-  // Kokoro fp32 on WebGPU (fp16 is faster but garbled); without WebGPU, Piper on the CPU.
-  const target: EngineId = engine in ENGINES ? (engine as EngineId) : gpu ? 'webgpu-fp32' : 'piper';
+  // Kokoro fp32 on WebGPU (fp16 is faster but garbled); without WebGPU, Supertonic on the CPU.
+  const target: EngineId = engine in ENGINES ? (engine as EngineId) : gpu ? 'webgpu-fp32' : 'supertonic';
   const piperVoice = isPiperVoice(voice) ? voice! : (piper?.id ?? DEFAULT_PIPER_VOICE);
   const ready = () => loaded && loaded.engine === target && (target !== 'piper' || loaded.voice === piperVoice || !isPiperVoice(voice));
   if (ready()) return { ...loaded!, cached: true };
   if (loading) await loading.catch(() => {});
   if (ready()) return { ...loaded!, cached: true };
+
+  if (target === 'supertonic') {
+    loading = (async () => {
+      const t0 = performance.now();
+      await loadSupertonic();
+      await synthSupertonic('Ready.', [], DEFAULT_SUPERTONIC_VOICE, 1); // warm-up
+      const r = await synthSupertonic(CALIBRATION, [], DEFAULT_SUPERTONIC_VOICE, 1);
+      loaded = { engine: 'supertonic', requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, realtime: +(r.audioSec / (r.genMs / 1000)).toFixed(2) };
+      return loaded;
+    })();
+    try {
+      return await loading;
+    } finally {
+      loading = null;
+    }
+  }
 
   if (target === 'piper') {
     loading = (async () => {
@@ -140,12 +168,12 @@ async function load({ engine = 'auto', voice }: { engine?: EngineChoice; voice?:
       }
     } catch (e) {
       if (ENGINES[target].device !== 'webgpu') throw e;
-      // WebGPU failed: Piper on the CPU is the light fallback (Kokoro on the CPU is too slow).
+      // WebGPU failed: Supertonic on the CPU (Kokoro on the CPU is too slow).
       fallbackReason = String((e as Error)?.message ?? e);
-      used = 'piper';
-      await loadPiper(DEFAULT_PIPER_VOICE);
+      used = 'supertonic';
+      await loadSupertonic();
     }
-    loaded = { engine: used, voice: used === 'piper' ? DEFAULT_PIPER_VOICE : undefined, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, fallbackReason, realtime: used === target ? realtime : undefined };
+    loaded = { engine: used, requested: engine, loadMs: Math.round(performance.now() - t0), cached: false, fallbackReason, realtime: used === target ? realtime : undefined };
     dropUnusedModels();
     return loaded;
   })();
@@ -199,12 +227,29 @@ async function synthPiper(text: string, words: string[], speed: number) {
   return { samples, sampleRate, audioSec, genMs: Math.round(genMs), wordTimes, exact: false };
 }
 
+/** Supertonic: characters → audio (no phonemes); word times estimated from character positions. */
+async function synthSupertonic(text: string, words: string[], voice: string, speed: number) {
+  if (!supertonic) throw new Error('Engine not loaded');
+  const style = SUPERTONIC_VOICES.some((v) => v.id === voice) ? voice : DEFAULT_SUPERTONIC_VOICE;
+  const t0 = performance.now();
+  const { samples, sampleRate } = await supertonic.synthesize(text, style, speed, SUPERTONIC_STEPS);
+  const genMs = performance.now() - t0;
+  const audioSec = samples.length / sampleRate;
+  const wordTimes = words.length ? estimateWordTimes(wordOffsets(text, words), text, audioSec) : [];
+  return { samples, sampleRate, audioSec, genMs: Math.round(genMs), wordTimes, exact: false };
+}
+
 const synthWith = (engine: EngineId, text: string, words: string[], voice: string, speed: number) =>
-  engine === 'piper' ? synthPiper(text, words, speed) : synth(text, words, voice, speed);
+  engine === 'piper' ? synthPiper(text, words, speed) : engine === 'supertonic' ? synthSupertonic(text, words, voice, speed) : synth(text, words, voice, speed);
 
 async function generate(p: { text: string; words: string[]; voice: string; speed: number; engine: EngineChoice }) {
   const info = await load({ engine: p.engine, voice: p.voice });
-  return { ...(await synthWith(info.engine, p.text, p.words, p.voice, p.speed)), engine: info.engine, voice: info.voice, realtime: info.realtime };
+  return {
+    ...(await synthWith(info.engine, p.text, p.words, p.voice, p.speed)),
+    engine: info.engine,
+    voice: info.engine === 'piper' ? info.voice : p.voice,
+    realtime: info.realtime,
+  };
 }
 
 const BENCH = [

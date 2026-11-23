@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- **Supertonic voices** (Supertone's Supertonic 2): natural voices that run on the processor, closer to Kokoro than Piper. One ~263 MB download, 10 voices (5 female, 5 male), ~8× faster than real time on an M1. **Auto** now goes Kokoro (fast graphics) → Supertonic (fast processor) → Piper; each step is timed when the voice loads, and the popup says why it stepped down. Choosing Auto again re-tests.
+- **Read a selection in one click**: select text and a small **Read** button appears next to it; it reads just that. Works on web pages, PDFs and Google Docs. Turn it off in the popup. **Alt+Shift+R** now reads the selection when text is selected (otherwise the page).
+
 ## 0.4.2
 
 - E-learning and app-like pages (e.g. Google Cloud Skills courses built with Articulate Rise): Spokify read only text hidden in a closed accordion, so nothing on screen was highlighted. Hidden text no longer decides what the article is, the whole lesson is read (headings included), and the page title isn't read twice.

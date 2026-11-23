@@ -6,6 +6,8 @@ import type { HostCommand } from '../shared/messages';
 const HOST_URL = 'host.html';
 const PDF_VIEWER = 'pdf.html';
 const DOCS_VIEWER = 'docs.html';
+/** Per-computer state the audio host needs (it can't read chrome.storage itself). */
+const MACHINE_KEYS = ['gpuSlow', 'stSlow', 'testSlowRealtime', 'testMute'];
 /** How long a page may take to collect its text before Read reports it as unresponsive. */
 const EXTRACT_TIMEOUT_MS = 15000;
 let creating: Promise<unknown> | null = null;
@@ -178,10 +180,12 @@ const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) 
   // The audio host can't use chrome.storage (offscreen document): it reads and saves the
   // per-computer "GPU too slow" flag through these.
   async machineState() {
-    return chrome.storage.local.get(['gpuSlow', 'testSlowRealtime', 'testMute']);
+    return chrome.storage.local.get(MACHINE_KEYS);
   },
   async saveMachine(msg) {
-    await chrome.storage.local.set({ gpuSlow: msg.gpuSlow });
+    // Only the speed flags may be written from the host.
+    const patch = Object.fromEntries(Object.entries(msg.patch ?? {}).filter(([k]) => k === 'gpuSlow' || k === 'stSlow'));
+    await chrome.storage.local.set(patch);
   },
   async hostInfo() {
     return { offscreenApi: !!chrome.offscreen?.createDocument, host: await ensureHost() };
@@ -202,14 +206,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // Settings changed in the popup or floating player: apply to the running session.
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area === 'sync' && changes.settings) toHostIfRunning({ type: 'settings', settings: await loadSettings() });
-  if (area === 'local' && (changes.gpuSlow || changes.testSlowRealtime || changes.testMute)) {
-    const { gpuSlow, testSlowRealtime, testMute } = await chrome.storage.local.get(['gpuSlow', 'testSlowRealtime', 'testMute']);
-    toHostIfRunning({
-      type: 'machine',
-      gpuSlow: gpuSlow as { realtime: number; at: number } | null,
-      testSlowRealtime: testSlowRealtime as number | undefined,
-      testMute: testMute as boolean | undefined,
-    });
+  if (area === 'local' && MACHINE_KEYS.some((k) => changes[k])) {
+    toHostIfRunning({ type: 'machine', ...((await chrome.storage.local.get(MACHINE_KEYS)) as object) } as HostCommand);
   }
 });
 
@@ -231,7 +229,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
 
 chrome.commands.onCommand.addListener((command) => {
   const run = (p: Promise<unknown>) => p.catch((e) => console.warn(command, e));
-  if (command === 'read-page') run(handlers.extract({ mode: 'page' }, {}));
+  // The shortcut reads the selection when there is one, else the page.
+  if (command === 'read-page') run(handlers.extract({ mode: 'auto' }, {}));
   if (command === 'toggle-pause') run(toHostIfRunning({ type: 'toggle' }));
   if (command === 'next-sentence') run(toHostIfRunning({ type: 'next' }));
   if (command === 'prev-sentence') run(toHostIfRunning({ type: 'prev' }));

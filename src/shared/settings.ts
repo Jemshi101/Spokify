@@ -1,6 +1,6 @@
-export type EngineId = 'webgpu-fp32' | 'wasm-q8' | 'piper';
+export type EngineId = 'webgpu-fp32' | 'wasm-q8' | 'piper' | 'supertonic';
 /**
- * 'auto' = Kokoro on a fast GPU, else Piper on the CPU.
+ * 'auto' = Kokoro on a fast GPU, else Supertonic on a fast CPU, else Piper.
  * 'system' = the browser's built-in voices (lite mode).
  */
 export type EngineChoice = 'auto' | 'system' | EngineId;
@@ -11,13 +11,26 @@ export interface Settings {
   voice: string;
   /** Piper voice id (rhasspy/piper-voices name). */
   piperVoice: string;
+  /** Supertonic voice style (F1–F5, M1–M5). */
+  supertonicVoice: string;
+  /** Show a "Read" button next to selected text. */
+  selectionButton: boolean;
   /** speechSynthesis voiceURI for lite mode ('' = browser default English voice). */
   systemVoice: string;
   speed: number;
 }
 
 export const DEFAULT_PIPER_VOICE = 'en_US-lessac-medium';
-export const DEFAULT_SETTINGS: Settings = { engine: 'auto', voice: 'af_heart', piperVoice: DEFAULT_PIPER_VOICE, systemVoice: '', speed: 1 };
+export const DEFAULT_SUPERTONIC_VOICE = 'F1';
+export const DEFAULT_SETTINGS: Settings = {
+  engine: 'auto',
+  voice: 'af_heart',
+  piperVoice: DEFAULT_PIPER_VOICE,
+  supertonicVoice: DEFAULT_SUPERTONIC_VOICE,
+  selectionButton: true,
+  systemVoice: '',
+  speed: 1,
+};
 
 export const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 export const MIN_SPEED = 0.5;
@@ -26,8 +39,9 @@ export const MAX_SPEED = 3;
 /** Kokoro renders up to this speed itself; anything faster is pitch-preserving playback rate. */
 export const MAX_MODEL_SPEED = 1.5;
 
-export const ENGINES: Record<EngineId, { family: 'kokoro' | 'piper'; device: 'webgpu' | 'wasm'; dtype: 'fp32' | 'q8'; label: string }> = {
+export const ENGINES: Record<EngineId, { family: 'kokoro' | 'piper' | 'supertonic'; device: 'webgpu' | 'wasm'; dtype: 'fp32' | 'q8'; label: string }> = {
   'webgpu-fp32': { family: 'kokoro', device: 'webgpu', dtype: 'fp32', label: 'Kokoro · WebGPU (best, ~330 MB)' },
+  supertonic: { family: 'supertonic', device: 'wasm', dtype: 'fp32', label: 'Supertonic · CPU (natural, ~263 MB)' },
   piper: { family: 'piper', device: 'wasm', dtype: 'fp32', label: 'Piper · CPU (light, ~63 MB per voice)' },
   'wasm-q8': { family: 'kokoro', device: 'wasm', dtype: 'q8', label: 'Kokoro · CPU (~90 MB, slow)' },
 };
@@ -48,6 +62,12 @@ export const PIPER_VOICES: { id: string; label: string }[] = [
   { id: 'en_GB-jenny_dioco-medium', label: 'Jenny · UK female' },
   { id: 'en_GB-alan-medium', label: 'Alan · UK male' },
   { id: 'en_GB-northern_english_male-medium', label: 'Northern English · UK male' },
+];
+
+/** Supertonic 2 voice styles (one model for all of them; each style is a ~0.3 MB file). */
+export const SUPERTONIC_VOICES: { id: string; label: string }[] = [
+  ...[1, 2, 3, 4, 5].map((n) => ({ id: `F${n}`, label: `Female ${n}` })),
+  ...[1, 2, 3, 4, 5].map((n) => ({ id: `M${n}`, label: `Male ${n}` })),
 ];
 
 /** Where a Piper voice's model and config download from. */
@@ -104,6 +124,7 @@ export async function loadSettings(): Promise<Settings> {
   // 0.2.0 offered a WebGPU fp16 engine; its output is garbled, so old choices fall back to Auto.
   if (s.engine !== 'auto' && s.engine !== 'system' && !(s.engine in ENGINES)) s.engine = 'auto';
   if (!PIPER_VOICES.some((v) => v.id === s.piperVoice)) s.piperVoice = DEFAULT_PIPER_VOICE;
+  if (!SUPERTONIC_VOICES.some((v) => v.id === s.supertonicVoice)) s.supertonicVoice = DEFAULT_SUPERTONIC_VOICE;
   return s;
 }
 

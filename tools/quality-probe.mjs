@@ -4,6 +4,7 @@
 import puppeteer from 'puppeteer';
 import path from 'node:path';
 import { spectralSimilarity } from '../tests/audio.mjs';
+import { freshExtensionScripts } from '../tests/profile.mjs';
 
 const which = process.argv[2] ?? 'chrome';
 const base = 'the reader keeps a steady pace and clear pronunciation while it moves through the article';
@@ -20,7 +21,7 @@ const SEQ = Array.from({ length: 24 }, (_, i) => `Sentence number ${i + 1} is he
 
 const opts = { headless: true, pipe: true, protocolTimeout: 1800000, enableExtensions: [path.resolve('dist')], args: ['--mute-audio', '--enable-unsafe-webgpu'] };
 if (which === 'opera') Object.assign(opts, { executablePath: '/Applications/Opera.app/Contents/MacOS/Opera', userDataDir: path.resolve('.e2e-opera') });
-else opts.userDataDir = path.resolve('.e2e-profile');
+else opts.userDataDir = freshExtensionScripts(path.resolve('.e2e-profile'));
 const browser = await puppeteer.launch(opts);
 try {
   const sw = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('sw.js'));
