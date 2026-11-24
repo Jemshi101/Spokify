@@ -74,6 +74,8 @@ async function init() {
 
   $<HTMLInputElement>('selBtn').checked = s.selectionButton;
   $('selBtn').onchange = () => saveSettings({ selectionButton: $<HTMLInputElement>('selBtn').checked });
+  $<HTMLInputElement>('hoverBtn').checked = s.hoverPlay;
+  $('hoverBtn').onchange = () => saveSettings({ hoverPlay: $<HTMLInputElement>('hoverBtn').checked });
   $('voice').onchange = () => saveSettings({ voice: $<HTMLSelectElement>('voice').value });
   $('piperVoice').onchange = () => saveSettings({ piperVoice: $<HTMLSelectElement>('piperVoice').value });
   $('stVoice').onchange = () => saveSettings({ supertonicVoice: $<HTMLSelectElement>('stVoice').value });

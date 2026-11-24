@@ -24,7 +24,7 @@ The manifest pins the extension id (`llacpmmoocpaoaijceajaknlbdedennp`) with a p
 
 - Popup **Read page** / **Read selection**, right-click menu, or **Alt+Shift+R** (reads the selection if there is one)
 - Select text: a **Read** button appears next to it
-- **Alt+click** any paragraph to start reading from there
+- **Alt+click** any paragraph to start reading from there, or, while reading, hover a sentence and click the play button next to it
 - **Alt+Shift+P** pause/resume · **Alt+Shift+.** / **Alt+Shift+,** next/previous sentence
 - Floating player: previous / play-pause / next, jump to highlight (when it is off-screen), voice, speed (click to cycle), stop; media keys work too
 - PDFs: press Read on a PDF tab, or right-click a PDF link → **Read PDF aloud** (opens the built-in viewer)
@@ -46,6 +46,7 @@ Supertonic 2 downloads from [supertone-oss-archive/supertonic-2](https://hugging
 | `src/engine/worker.ts` | Kokoro (timestamped ONNX export, WebGPU fp32; fp16, q4f16 and uint8 garble the voice) or Piper; one model in memory, one request at a time; times the engine on load |
 | `src/engine/supertonic.ts` | Supertonic 2: cached download, text preprocessing, 4-model flow-matching pipeline on ONNX Runtime (WASM) |
 | `src/reader/selectionButton.ts` | The Read button next to selected text |
+| `src/reader/hoverPlay.ts` | The play button next to a hovered sentence while reading |
 | `src/engine/piper.ts` | Piper voices: cached download, espeak phonemes → ids, ONNX Runtime (WASM), estimated word times |
 | `src/engine/phonemize.ts` | Text normalization + espeak phonemization (ported from kokoro-js so we control it) |
 | `src/engine/align.ts` | Edit-distance alignment of per-word phonemes to the sentence → exact per-word start times from the model's `durations` |

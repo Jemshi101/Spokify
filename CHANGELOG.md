@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0
+
+- **Read from here while listening**: while Spokify is reading a page, hover any sentence and a small play button appears in the margin next to it. Click it to continue reading from that sentence. Hovering the button underlines the sentence it will start from. It works on web pages, PDFs and Google Docs, and you can turn it off in the popup.
+
 ## 0.5.0
 
 - **Supertonic voices** (Supertone's Supertonic 2): natural voices that run on the processor, closer to Kokoro than Piper. One ~263 MB download, 10 voices (5 female, 5 male), ~8× faster than real time on an M1. **Auto** now goes Kokoro (fast graphics) → Supertonic (fast processor) → Piper; each step is timed when the voice loads, and the popup says why it stepped down. Choosing Auto again re-tests.

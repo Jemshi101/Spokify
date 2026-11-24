@@ -3,6 +3,7 @@
 import type { Sentence } from './extract';
 import { Player } from './player';
 import { SelectionButton } from './selectionButton';
+import { HoverPlay } from './hoverPlay';
 import { PIPER_VOICES, SUPERTONIC_VOICES, VOICES, loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
 import { sortedSystemVoices, voiceLabel } from '../host/voices';
 import type { SpeechSegment, TabEvent } from '../shared/messages';
@@ -25,6 +26,7 @@ const hasSelection = () => (getSelection()?.toString().trim().length ?? 0) >= 3;
 export function createReader(opts: ReaderOptions) {
   const hasHighlights = typeof CSS !== 'undefined' && 'highlights' in CSS;
   let sentences: Sentence[] = [];
+  let segments: SpeechSegment[] = [];
   let current: { sid: number; starts: number[]; lastWord: number; raf: number; live: boolean } | null = null;
   let readingKey: string | null = null;
   const clock = { pos: 0, rate: 1, t0: 0, paused: false };
@@ -68,20 +70,41 @@ export function createReader(opts: ReaderOptions) {
   });
   let family: 'kokoro' | 'supertonic' | 'piper' | 'system' = 'kokoro';
   const selectionButton = new SelectionButton(() => start(opts.extract('selection'), false));
+  // While reading: hover a sentence for a play button that continues from there.
+  let lastHover = -1;
+  const hoverPlay = new HoverPlay({
+    find(node, offset) {
+      const at = (i: number) => {
+        try {
+          return sentences[i]?.range.comparePoint(node, offset) === 0;
+        } catch {
+          return false;
+        }
+      };
+      if (!at(lastHover)) lastHover = sentences.findIndex((_, i) => at(i));
+      return lastHover >= 0 ? { sid: lastHover, range: sentences[lastHover].range } : null;
+    },
+    onPlay: (sid) => jumpTo(sid),
+    onPreview: (range) => highlight('tts-hover', range),
+  });
   loadSettings().then((s) => {
     player.setSpeed(s.speed);
     selectionButton.enabled = s.selectionButton;
+    hoverPlay.enabled = s.hoverPlay;
   });
   onSettingsChanged((s) => {
     player.setSpeed(s.speed);
     selectionButton.enabled = s.selectionButton;
     if (!s.selectionButton) selectionButton.hide();
+    hoverPlay.enabled = s.hoverPlay;
+    if (!s.hoverPlay) hoverPlay.hide();
   });
 
   const style = document.createElement('style');
   style.textContent = `
     ::highlight(tts-sentence) { background-color: rgba(255, 213, 79, 0.3); }
-    ::highlight(tts-word) { background-color: rgba(255, 179, 0, 0.85); color: #111; }`;
+    ::highlight(tts-word) { background-color: rgba(255, 179, 0, 0.85); color: #111; }
+    ::highlight(tts-hover) { background-color: rgba(122, 167, 255, 0.18); text-decoration: underline 2px rgba(255, 179, 0, 0.9); }`;
   (document.head || document.documentElement).appendChild(style);
 
   // ---------- reading ----------
@@ -103,7 +126,9 @@ export function createReader(opts: ReaderOptions) {
       const saved = await loadPosition(readingKey);
       if (saved && saved.total === sentences.length && saved.sid > 0 && saved.sid < sentences.length - 1) startAt = saved.sid;
     }
-    const segments: SpeechSegment[] = sentences.map((s) => ({ text: s.text, words: s.words.map((w) => w.text) }));
+    segments = sentences.map((s) => ({ text: s.text, words: s.words.map((w) => w.text) }));
+    hoverPlay.active = true;
+    hoverPlay.currentSid = -1;
     player.status('Starting…');
     player.setPaused(false);
     send({ type: 'read', segments, startAt, title: document.title });
@@ -116,6 +141,16 @@ export function createReader(opts: ReaderOptions) {
     return { ok: true, count: sentences.length, startAt };
   }
 
+  /** Continues the current reading from sentence `sid` (the hover play button). */
+  function jumpTo(sid: number) {
+    if (!segments.length || !sentences[sid]) return;
+    player.clearOffer();
+    player.status('Starting…');
+    player.setPaused(false);
+    userScrolledAt = 0;
+    send({ type: 'read', segments, startAt: sid, title: document.title });
+  }
+
   // ---------- highlighting ----------
 
   function highlight(name: string, range: Range | null | undefined) {
@@ -126,6 +161,8 @@ export function createReader(opts: ReaderOptions) {
 
   function clear() {
     if (current) cancelAnimationFrame(current.raf);
+    hoverPlay.active = false;
+    hoverPlay.hide();
     current = null;
     player.setLocate(false);
     player.closeMenu();
@@ -180,6 +217,7 @@ export function createReader(opts: ReaderOptions) {
       starts = s.words.map((w) => (w.charStart / s.text.length) * voiced);
     }
     current = { sid: e.sid, starts, lastWord: -1, raf: 0, live: !!e.live };
+    hoverPlay.currentSid = e.sid;
     setClock(0, e.rate, false);
     highlight('tts-sentence', s.range);
     highlight('tts-word', null);

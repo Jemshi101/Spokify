@@ -15,6 +15,8 @@ export interface Settings {
   supertonicVoice: string;
   /** Show a "Read" button next to selected text. */
   selectionButton: boolean;
+  /** While reading, show a play button next to the hovered sentence to continue from there. */
+  hoverPlay: boolean;
   /** speechSynthesis voiceURI for lite mode ('' = browser default English voice). */
   systemVoice: string;
   speed: number;
@@ -28,6 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   piperVoice: DEFAULT_PIPER_VOICE,
   supertonicVoice: DEFAULT_SUPERTONIC_VOICE,
   selectionButton: true,
+  hoverPlay: true,
   systemVoice: '',
   speed: 1,
 };

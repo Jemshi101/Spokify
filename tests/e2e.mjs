@@ -291,6 +291,27 @@ try {
     check('the shortcut reads the selection when text is selected', viaKey.length === 2 && viaKey[0].startsWith('Reading along also helps'), JSON.stringify(viaKey));
     await call({ type: 'host', payload: { type: 'stop' } });
     await page.evaluate(() => getSelection().removeAllRanges());
+
+    // While reading, hovering a sentence shows a play button that continues from there.
+    await ext.evaluate(() => chrome.storage.local.remove('positions'));
+    await call({ type: 'extract', mode: 'page', tabId });
+    await waitFor(async () => (await state()).sentence, 10000);
+    const target = await page.$('main .content p:nth-of-type(4)');
+    const tb = await target.boundingBox();
+    await page.mouse.move(tb.x + 40, tb.y + 8);
+    await page.mouse.move(tb.x + 60, tb.y + 10);
+    const play = await waitFor(async () => { const q = await boxOf(await inShadow('button[aria-label="Read from here"]')); return q && q[2] - q[0] > 0 && q; }, 3000);
+    const jump = ext.evaluate(() => new Promise((ok) => chrome.runtime.onMessage.addListener(function l(m) {
+      if (m.target === 'host' && m.type === 'read') { chrome.runtime.onMessage.removeListener(l); ok({ startAt: m.startAt, text: m.segments[m.startAt]?.text }); }
+    })));
+    if (play) await page.mouse.click((play[0] + play[4]) / 2, (play[1] + play[5]) / 2);
+    const jumped = play ? await Promise.race([jump, sleep(10000).then(() => null)]) : null;
+    const paraText = await target.evaluate((p) => p.textContent.replace(/\s+/g, ' '));
+    const nowAt = jumped && (await waitFor(async () => { const x = await state(); return x.sid === jumped.startAt && x; }, 10000));
+    check('hovering a sentence while reading shows a play button that continues from there',
+      !!play && jumped?.startAt > 0 && paraText.includes(jumped.text.slice(0, 30)) && !!nowAt, JSON.stringify({ play: !!play, jumped }));
+    await call({ type: 'host', payload: { type: 'stop' } });
+    await page.mouse.move(1, 1);
     await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
   }
 
