@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1
+
+- E-learning lessons with tabs (Articulate Rise, e.g. Google Cloud Skills courses): Spokify read only the open tab and skipped the introduction, headings and other blocks around it. The tab's text sits deeper in the page than Spokify looked, so it now looks further up and reads the whole lesson.
+- Screen-reader-only text ("(opens in a new tab)" after links, hidden carousel counters) is no longer read. It used to break sentences in two.
+
 ## 0.6.0
 
 - **Read from here while listening**: while Spokify is reading a page, hover any sentence and a small play button appears in the margin next to it. Click it to continue reading from that sentence. Hovering the button underlines the sentence it will start from. It works on web pages, PDFs and Google Docs, and you can turn it off in the popup.

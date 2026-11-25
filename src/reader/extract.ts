@@ -31,6 +31,16 @@ const UNLIKELY = /\b(comment|share|social|related|promo|advert|ads?|sponsor|side
 const sentSeg = new Intl.Segmenter('en', { granularity: 'sentence' });
 const wordSeg = new Intl.Segmenter('en', { granularity: 'word' });
 
+/**
+ * Screen-reader-only text ("sr-only", "visually-hidden"): positioned out of flow and clipped to
+ * nothing or 1px. It isn't on screen, and it says things like "(opens in a new tab)" mid-sentence.
+ */
+function visuallyHidden(cs: CSSStyleDeclaration): boolean {
+  if (cs.position !== 'absolute' && cs.position !== 'fixed') return false;
+  if (/^inset\(50%/.test(cs.clipPath) || /^rect\(0(px)?,? 0(px)?,? 0(px)?,? 0(px)?\)$/.test(cs.clip) || /^rect\(1px,? 1px,? 1px,? 1px\)$/.test(cs.clip)) return true;
+  return cs.overflow === 'hidden' && parseFloat(cs.width) <= 1 && parseFloat(cs.height) <= 1;
+}
+
 function isUnlikely(el: Element): boolean {
   const hint = `${typeof el.className === 'string' ? el.className : ''} ${el.id}`;
   return UNLIKELY.test(hint) && !/\b(article|body|content|main|post)\b/i.test(el.tagName);
@@ -90,7 +100,8 @@ export function findArticleRoot(doc: Document = document): Element {
     for (const [k, v] of scores) if (el.contains(k)) w += v;
     return w;
   };
-  for (let entry: Element = best, level = 0; level < 10; level++) {
+  // Deep enough for course builders (Articulate Rise nests a tab's text 13 levels below its lesson block).
+  for (let entry: Element = best, level = 0; level < 16; level++) {
     const parent: Element | null = entry.parentElement;
     if (!parent || parent === doc.body || parent === doc.documentElement) break;
     const sig = signature(entry);
@@ -150,7 +161,7 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
     let d = display.get(el);
     if (d === undefined) {
       const cs = getComputedStyle(el);
-      d = cs.visibility === 'hidden' ? 'none' : cs.display;
+      d = cs.visibility === 'hidden' || visuallyHidden(cs) ? 'none' : cs.display;
       display.set(el, d);
     }
     return d;
