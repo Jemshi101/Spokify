@@ -52,7 +52,7 @@ ${[
 // a closed accordion hides a long transcript that must not be read, and the longest text sits in a
 // tab panel 12 levels below its lesson block, with screen-reader-only "(opens in a new tab)" in a link.
 // ARIA tabs and an ARIA carousel: closed tabs and hidden slides are read too, and switched to when reading
-// reaches them, and an ARIA accordion section is read (title first) and expanded. The takeaway has double spaces in its HTML (word highlights must not shift).
+// reaches them, flip cards (also stacked in a carousel) are read front then back and turned over, and an ARIA accordion section is read (title first) and expanded. The takeaway has double spaces in its HTML (word highlights must not shift).
 const deep = (html) => '<div><div><div class="row"><div class="col"><div class="view"><div>' + html + '</div></div></div></div></div></div>';
 const COURSE = `<!doctype html><html><head><title>Lesson</title><style>html,body{margin:0;height:100%;overflow:hidden}#scroller{height:100%;overflow:auto}.gap{height:1600px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}</style></head><body>
 <header class="bar"><h1>Introduction to agents</h1></header>
@@ -65,6 +65,7 @@ ${[
   '<div class="aria-tabs"><div role="tablist"><button role="tab" id="tab-a" aria-controls="panel-a" aria-selected="true">Overview</button><button role="tab" id="tab-b" aria-controls="panel-b" aria-selected="false">Pricing</button></div><div role="tabpanel" id="panel-a"><p>The overview tab says what agents do.</p></div><div role="tabpanel" id="panel-b" hidden><p>The pricing tab explains what agents cost to run.</p></div></div>',
   '<div class="acc"><h3><button aria-expanded="false" aria-controls="acc-1" id="acc-btn">Usage limits</button></h3><section id="acc-1" style="display:none"><p>The usage limits section explains quotas.</p></section></div>',
   '<div role="region" aria-roledescription="carousel" aria-label="Steps"><button aria-label="Previous slide">‹</button><button aria-label="Next slide">›</button><div class="slides"><div role="group" aria-roledescription="slide"><p>Step one is to plan the task.</p></div><div role="group" aria-roledescription="slide" hidden inert><p>Step two is to connect the tools.</p></div></div></div>',
+  '<div role="region" aria-roledescription="carousel" class="cards"><button aria-label="Next card slide">›</button><div role="group" aria-roledescription="slide"><div class="flashcard"><div role="group" aria-label="Front of card"><button class="flip"></button><p>Card one asks which tool to use.</p></div><div role="group" aria-label="Back of card" inert style="opacity:0"><div class="flip-tooltip" aria-hidden="true">Click to flip</div><div class="desc" aria-hidden="true"><p>Card one answers with the right tool.</p></div></div></div></div><div role="group" aria-roledescription="slide" hidden inert style="display:block;visibility:hidden"><div class="flashcard"><div role="group" aria-label="Front of card"><button class="flip"></button><p>Card two asks which tool to use.</p></div><div role="group" aria-label="Back of card" inert style="opacity:0"><div class="flip-tooltip" aria-hidden="true">Click to flip</div><div class="desc" aria-hidden="true"><p>Card two answers with the right tool.</p></div></div></div></div></div>',
   '<h2>Key takeaway</h2><p>Agents  plan,  use tools, and carry a task through to the end, within the limits you set. They are used for travel, scheduling, support, and software work.</p>',
 ].map((b) => '<div class="block">' + deep(b) + '</div>').join('\n')}
 </div></main></div>
@@ -74,6 +75,17 @@ for (const t of document.querySelectorAll('[role=tab]')) t.onclick = () => {
     u.setAttribute('aria-selected', String(u === t));
     document.getElementById(u.getAttribute('aria-controls')).hidden = u !== t;
   }
+};
+// Flip cards: the front's button turns the card over; the stack's next button shows the next card
+// (inactive cards are hidden with visibility, like Rise's stacked flashcards).
+for (const f of document.querySelectorAll('.flip')) f.onclick = () => {
+  const card = f.closest('.flashcard'), back = card.querySelector('[aria-label="Back of card"]');
+  back.inert = false; back.style.opacity = '1'; back.querySelector('.desc').removeAttribute('aria-hidden');
+  card.querySelector('[aria-label="Front of card"]').inert = true;
+};
+document.querySelector('[aria-label="Next card slide"]').onclick = () => {
+  const ss = [...document.querySelectorAll('.cards > [aria-roledescription=slide]')], i = ss.findIndex((s) => !s.hidden);
+  if (i < ss.length - 1) setTimeout(() => ss.forEach((s, k) => { s.hidden = s.inert = k !== i + 1; s.style.visibility = k === i + 1 ? '' : 'hidden'; }), 200);
 };
 const accBtn = document.getElementById('acc-btn');
 accBtn.onclick = () => {
@@ -578,6 +590,8 @@ try {
     const atPricing = await waitFor(async () => /pricing tab explains/.test((await state()).sentence ?? ''), 60000);
     const shown = await page.evaluate(() => ({ selected: document.getElementById('tab-b').getAttribute('aria-selected'), visible: document.getElementById('panel-b').checkVisibility(), other: document.getElementById('panel-a').hidden }));
     check('reading switches to a closed tab when it gets there', !!atPricing && shown.selected === 'true' && shown.visible && shown.other, JSON.stringify({ atPricing: !!atPricing, ...shown }));
+    const cardOrder = ['Card one asks which tool to use.', 'Card one answers with the right tool.', 'Card two asks which tool to use.', 'Card two answers with the right tool.'].map((t) => cs.indexOf(t));
+    check('flip cards are read front then back, every card in a stack', cardOrder.every((i, k) => i >= 0 && (k === 0 || i === cardOrder[k - 1] + 1)) && !cs.includes('Click to flip'), JSON.stringify(cardOrder));
     const atAcc = await waitFor(async () => /usage limits section/.test((await state()).sentence ?? ''), 30000);
     const accOpen = await page.evaluate(() => document.getElementById('acc-btn').getAttribute('aria-expanded') === 'true' && document.getElementById('acc-1').checkVisibility());
     check('reading expands a collapsed section when it gets there', !!atAcc && accOpen, JSON.stringify({ atAcc: !!atAcc, accOpen }));
@@ -585,6 +599,12 @@ try {
     const atStep2 = await waitFor(async () => /Step two/.test((await state()).sentence ?? ''), 30000);
     const slideShown = await waitFor(() => page.evaluate(() => !document.querySelectorAll('[aria-roledescription=slide]')[1].hidden), 3000);
     check('reading moves the carousel to a hidden slide when it gets there', !!atStep2 && !!slideShown, JSON.stringify({ atStep2: !!atStep2, slideShown: !!slideShown }));
+    const atBack2 = await waitFor(async () => /Card two answers/.test((await state()).sentence ?? ''), 30000);
+    const flipped = await waitFor(() => page.evaluate(() => {
+      const s2 = document.querySelectorAll('.cards > [aria-roledescription=slide]')[1];
+      return !s2.hidden && !s2.querySelector('[aria-label="Back of card"]').inert;
+    }), 3000);
+    check('reading moves to the next card and turns it over', !!atBack2 && !!flipped, JSON.stringify({ atBack2: !!atBack2, flipped: !!flipped }));
     // Word highlights stay on whole words after collapsed double spaces.
     await waitFor(async () => /^Agents\s+plan/.test((await state()).sentence ?? ''), 30000);
     const words = new Set();

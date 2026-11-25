@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- **Flip cards are read front and back**: each card's front is read, then its back, and Spokify turns the card over as it gets there. Stacks of cards ("1 of 4") are read card by card, moving the stack along. The "Click to flip" hint isn't read.
+- Slides hidden with `visibility: hidden` (as Rise's card stacks do) were skipped even though the carousel was read. They're read now.
+- Quiz questions and their answer options were already read. The correct answers aren't on the page until you submit, so Spokify can't read them in advance.
+
 ## 0.9.0
 
 - **Pages that load as you scroll** (e.g. Rise lessons): Spokify kept reading only what was on the page when you pressed play. Near the end it now checks for text the page has loaded since and carries on without a pause. At the very end it scrolls down a little to let the page load more, and continues if anything appears.

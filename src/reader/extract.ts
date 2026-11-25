@@ -15,15 +15,18 @@ export interface Sentence {
 }
 
 /** Never read these elements (or anything inside them). */
-const SKIP_SELECTOR = [
+const SKIP_HARD = [
   'script', 'style', 'noscript', 'template', 'svg', 'math', 'canvas', 'video', 'audio', 'iframe',
   'nav', 'footer', 'aside', 'button', 'select', 'textarea', 'input', 'form', 'dialog', 'sup',
   'header:not(article header):not(main header)',
   '[role=navigation]', '[role=banner]', '[role=contentinfo]', '[role=complementary]', '[role=dialog]',
-  '[aria-hidden=true]', '[hidden]', '[contenteditable=true]', '[data-nosnippet]', '.nocontent', '[role=tooltip]',
+  '[contenteditable=true]', '[data-nosnippet]', '.nocontent', '[role=tooltip]',
   // Collapsed sections: their content isn't on screen (e.g. GitHub's "Assets … Loading").
   'details:not([open])',
-].join(',');
+];
+const SKIP_SELECTOR = [...SKIP_HARD, '[aria-hidden=true]', '[hidden]'].join(',');
+/** Inside the back of a flip card, which is hidden from everyone until it's turned over. */
+const SKIP_ON_CARD_BACK = [...SKIP_HARD, '[class*="tooltip" i]'].join(',');
 
 /** Readability-style class/id hints for boilerplate inside an article. */
 const UNLIKELY = /\b(comment|share|social|related|promo|advert|ads?|sponsor|sidebar|newsletter|subscribe|signup|footnote|references|reflist|navbox|infobox|metadata|breadcrumb|toc|editsection|noprint|cookie|banner|popup|modal|tooltip|byline-tools|skip-link)\b/i;
@@ -182,8 +185,24 @@ const CAROUSEL = '[aria-roledescription="carousel" i]';
 const isSlide = (el: Element) => el.matches(SLIDE) && !!el.parentElement?.closest(CAROUSEL);
 const slideShown = (el: Element) => !(el as HTMLElement).hidden && !(el as HTMLElement).inert && el.getAttribute('aria-hidden') !== 'true';
 
+/**
+ * Flip cards: a "Front of card" / "Back of card" pair of labelled groups (Articulate Rise and similar).
+ * The back is hidden (and its text aria-hidden) until the card is turned over.
+ */
+function cardFrontOf(back: Element): HTMLElement | null {
+  if (!/^back\b/i.test(back.getAttribute('aria-label') ?? '')) return null;
+  const front = [...(back.parentElement?.children ?? [])].find((c) => c !== back && /^front\b/i.test(c.getAttribute('aria-label') ?? ''));
+  return (front as HTMLElement | undefined) ?? null;
+}
+const isCardBack = (el: Element) => !!cardFrontOf(el);
+/** The flip card back that `el` is in, if any. */
+function cardBackAround(el: Element): Element | null {
+  const back = el.closest('[aria-label^="back" i]');
+  return back && isCardBack(back) ? back : null;
+}
+
 /** Panels hidden by a widget that the reader can open: read them, and reveal them when reading gets there. */
-const isRevealable = (el: Element) => isTabPanel(el) || isSlide(el) || (!!el.id && !!disclosureFor(el));
+const isRevealable = (el: Element) => isTabPanel(el) || isSlide(el) || isCardBack(el) || (!!el.id && !!disclosureFor(el));
 
 function elementOf(range: Range): Element | null {
   const n = range.startContainer;
@@ -217,6 +236,17 @@ function revealSections(el: Element): boolean {
   return toOpen.length > 0;
 }
 
+/** Turns a flip card over when `el` is on its back. */
+function revealCardBack(el: Element): boolean {
+  const back = cardBackAround(el);
+  if (!back) return false;
+  const shown = !(back as HTMLElement).inert && back.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+  if (shown) return false;
+  const front = cardFrontOf(back)!;
+  (front.querySelector<HTMLElement>('button, [role=button]') ?? front).click();
+  return true;
+}
+
 /** Steps a carousel with its next/previous buttons until the slide holding `el` is the one shown. */
 async function revealSlide(el: Element): Promise<boolean> {
   const slide = el.closest(SLIDE);
@@ -243,9 +273,12 @@ async function revealSlide(el: Element): Promise<boolean> {
 export async function reveal(range: Range): Promise<boolean> {
   const el = elementOf(range);
   if (!el) return false;
+  // Outer widgets first: a section, then a tab or slide inside it, then the card on that slide.
   const opened = revealSections(el);
-  if (revealTab(el)) return true;
-  return (await revealSlide(el)) || opened;
+  const tab = revealTab(el);
+  const slide = await revealSlide(el);
+  const card = revealCardBack(el);
+  return opened || tab || slide || card;
 }
 
 const INLINE = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid', 'contents', 'ruby']);
@@ -256,19 +289,23 @@ const INLINE = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid', 
  * which Intl.Segmenter treats as a sentence break.
  */
 function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = {}): Paragraph[] {
-  const display = new Map<Element, string>();
+  const styles = new Map<Element, { display: string; hidden: boolean; invisible: boolean }>();
   const styleOf = (el: Element) => {
-    let d = display.get(el);
-    if (d === undefined) {
+    let st = styles.get(el);
+    if (!st) {
       const cs = getComputedStyle(el);
-      d = cs.visibility === 'hidden' || visuallyHidden(cs) ? 'none' : cs.display;
-      display.set(el, d);
+      st = { display: cs.display, hidden: cs.display === 'none' || visuallyHidden(cs), invisible: cs.visibility === 'hidden' };
+      styles.set(el, st);
     }
-    return d;
+    return st;
   };
+  // Closed tabs, slides, sections and card backs being read anyway: their own hiding (e.g. an inherited
+  // visibility:hidden on a stacked slide) doesn't count inside them.
+  const opened: Element[] = [];
+  const insideOpened = (el: Element) => opened.some((o) => o.contains(el));
   const blockOf = opts.blockOf ?? ((el: Element): Element => {
     for (let e: Element | null = el; e; e = e.parentElement) {
-      if (e === root || !INLINE.has(styleOf(e))) return e;
+      if (e === root || !INLINE.has(styleOf(e).display)) return e;
     }
     return root;
   });
@@ -281,8 +318,18 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
       if (n.nodeType === Node.ELEMENT_NODE) {
         const el = n as Element;
         // Closed tabs and hidden carousel slides are read too (the reader opens them as it reaches them).
-        if (el !== root && !range && isRevealable(el)) return NodeFilter.FILTER_ACCEPT;
-        if (el !== root && (el.matches(SKIP_SELECTOR) || isUnlikely(el) || styleOf(el) === 'none')) return NodeFilter.FILTER_REJECT;
+        if (el !== root && !range && isRevealable(el)) {
+          opened.push(el);
+          return NodeFilter.FILTER_ACCEPT;
+        }
+        // On a flip card's back everything is marked hidden until it's turned over: read it anyway.
+        if (!range && cardBackAround(el)) {
+          if (el.matches(SKIP_ON_CARD_BACK) || isUnlikely(el) || styleOf(el).hidden) return NodeFilter.FILTER_REJECT;
+          return el.tagName === 'BR' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+        }
+        const st = styleOf(el);
+        const hidden = st.hidden || (st.invisible && !insideOpened(el));
+        if (el !== root && (el.matches(SKIP_SELECTOR) || isUnlikely(el) || hidden)) return NodeFilter.FILTER_REJECT;
         return el.tagName === 'BR' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
       }
       if (!n.nodeValue) return NodeFilter.FILTER_SKIP;
