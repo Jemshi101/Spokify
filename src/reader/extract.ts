@@ -148,7 +148,7 @@ export interface CollectOptions {
   brText?: string | ((br: Element) => string);
 }
 
-// ---------- tabs and carousels ----------
+// ---------- tabs, expandable sections and carousels ----------
 
 /** The tab button that shows this panel (ARIA tabs: aria-controls on the tab, or aria-labelledby on the panel). */
 export function tabFor(panel: Element): HTMLElement | null {
@@ -162,6 +162,20 @@ export function tabFor(panel: Element): HTMLElement | null {
 
 const isTabPanel = (el: Element) => el.getAttribute('role') === 'tabpanel' && !!tabFor(el);
 
+/**
+ * The button that expands this section (WAI-ARIA disclosure / accordion: aria-expanded + aria-controls).
+ * Pop-up menus and lists are not sections.
+ */
+export function disclosureFor(panel: Element): HTMLElement | null {
+  if (!panel.id || panel.matches('[role=menu],[role=listbox],[role=dialog],[role=tooltip],[role=tree],[role=grid]')) return null;
+  const btn = panel.ownerDocument.querySelector<HTMLElement>(`[aria-expanded][aria-controls~="${CSS.escape(panel.id)}"]:not([role=tab]):not([role=combobox])`);
+  const popup = btn?.getAttribute('aria-haspopup');
+  return btn && (popup == null || popup === 'false') ? btn : null;
+}
+
+/** The control that names this panel and opens it: its tab, or its expand button. */
+const labelFor = (el: Element) => (el.getAttribute('role') === 'tabpanel' ? tabFor(el) : null) ?? disclosureFor(el);
+
 /** Accessible carousels (WAI-ARIA pattern): slides marked aria-roledescription="slide" inside a "carousel". */
 const SLIDE = '[aria-roledescription="slide" i]';
 const CAROUSEL = '[aria-roledescription="carousel" i]';
@@ -169,7 +183,7 @@ const isSlide = (el: Element) => el.matches(SLIDE) && !!el.parentElement?.closes
 const slideShown = (el: Element) => !(el as HTMLElement).hidden && !(el as HTMLElement).inert && el.getAttribute('aria-hidden') !== 'true';
 
 /** Panels hidden by a widget that the reader can open: read them, and reveal them when reading gets there. */
-const isRevealable = (el: Element) => isTabPanel(el) || isSlide(el);
+const isRevealable = (el: Element) => isTabPanel(el) || isSlide(el) || (!!el.id && !!disclosureFor(el));
 
 function elementOf(range: Range): Element | null {
   const n = range.startContainer;
@@ -185,6 +199,22 @@ function revealTab(el: Element): boolean {
   if (!tab || tab.getAttribute('aria-selected') === 'true') return false;
   tab.click();
   return true;
+}
+
+/** Expands every collapsed section around `el` (outermost first), or the one whose title `el` is. */
+function revealSections(el: Element): boolean {
+  const toOpen: HTMLElement[] = [];
+  // Reading a section's title: open it now so its content shows next.
+  const own = el.closest<HTMLElement>('[aria-expanded=false][aria-controls]');
+  const target = own && own.ownerDocument.getElementById(own.getAttribute('aria-controls')!.split(/\s+/)[0]);
+  if (own && target && disclosureFor(target) === own) toOpen.push(own);
+  for (let e: Element | null = el; e; e = e.parentElement) {
+    if (!e.id) continue;
+    const btn = disclosureFor(e);
+    if (btn?.getAttribute('aria-expanded') === 'false') toOpen.unshift(btn);
+  }
+  for (const btn of toOpen) if (btn.getAttribute('aria-expanded') === 'false') btn.click();
+  return toOpen.length > 0;
 }
 
 /** Steps a carousel with its next/previous buttons until the slide holding `el` is the one shown. */
@@ -213,8 +243,9 @@ async function revealSlide(el: Element): Promise<boolean> {
 export async function reveal(range: Range): Promise<boolean> {
   const el = elementOf(range);
   if (!el) return false;
+  const opened = revealSections(el);
   if (revealTab(el)) return true;
-  return revealSlide(el);
+  return (await revealSlide(el)) || opened;
 }
 
 const INLINE = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid', 'contents', 'ruby']);
@@ -262,10 +293,10 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
 
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     if (n.nodeType === Node.ELEMENT_NODE && (n as Element).tagName !== 'BR') {
-      // A tab panel: its tab's name comes first, as a heading. A slide: just a new paragraph.
-      const tab = isTabPanel(n as Element) ? tabFor(n as Element) : null;
-      const label = tab && textMap(tab);
-      if (tab && label && /[\p{L}\p{N}]/u.test(label.text)) paragraphs.push({ block: tab, ...label });
+      // A tab panel or expandable section: its tab or title comes first, as a heading. A slide: just a new paragraph.
+      const control = labelFor(n as Element);
+      const label = control && !root.contains(control) ? null : control && textMap(control);
+      if (control && label && /[\p{L}\p{N}]/u.test(label.text)) paragraphs.push({ block: control, ...label });
       cur = null;
       continue;
     }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0
+
+- **Pages that load as you scroll** (e.g. Rise lessons): Spokify kept reading only what was on the page when you pressed play. Near the end it now checks for text the page has loaded since and carries on without a pause. At the very end it scrolls down a little to let the page load more, and continues if anything appears.
+- **Expandable sections are read**: collapsed sections ("Click + to expand") are read in order, title first, and expanded as reading gets there. Works with sections built the standard accessible way. Hidden text without a matching expand button is still skipped.
+
 ## 0.8.0
 
 - **Carousels are read too**: step-by-step boxes and slide carousels (e.g. "Click the arrows to learn more" in Rise lessons) are read slide by slide. Spokify moves the carousel to each slide as it gets there, so you can follow the highlight. Works with carousels built the standard accessible way.

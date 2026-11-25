@@ -137,6 +137,12 @@ const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) 
     await setReadingTab(tabId, sender.tab?.url);
     return toHost({ type: 'read', tabId, segments: msg.segments, startAt: msg.startAt, title: msg.title, settings: await loadSettings() });
   },
+  // From the content script: text the page loaded while being read.
+  async append(msg, sender) {
+    const tabId = sender.tab?.id;
+    if (tabId == null) throw new Error('append must come from a tab');
+    return toHost({ type: 'append', tabId, segments: msg.segments });
+  },
   // From popup / shortcuts: ask a tab to extract its text and start reading.
   async extract(msg) {
     const tabId: number = msg.tabId ?? (await activeTabId());

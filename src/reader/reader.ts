@@ -35,7 +35,10 @@ export function createReader(opts: ReaderOptions) {
 
   const send = (msg: object) => chrome.runtime.sendMessage({ target: 'sw', ...msg });
   const player = new Player({
-    onAction: (a) => send({ type: 'host', payload: { type: a } }),
+    onAction: (a) => {
+      if (a === 'stop') moreToken++; // cancels waiting for more text after the end
+      send({ type: 'host', payload: { type: a } });
+    },
     onSpeed: (speed) => saveSettings({ speed }),
     onLocate: () => {
       userScrolledAt = 0; // resume auto-scroll
@@ -69,7 +72,7 @@ export function createReader(opts: ReaderOptions) {
       ),
   });
   let family: 'kokoro' | 'supertonic' | 'piper' | 'system' = 'kokoro';
-  const selectionButton = new SelectionButton(() => start(opts.extract('selection'), false));
+  const selectionButton = new SelectionButton(() => start(opts.extract('selection'), false, false));
   // While reading: hover a sentence for a play button that continues from there.
   let lastHover = -1;
   const hoverPlay = new HoverPlay({
@@ -109,8 +112,11 @@ export function createReader(opts: ReaderOptions) {
 
   // ---------- reading ----------
 
-  async function start(found: Sentence[], resume: boolean) {
+  async function start(found: Sentence[], resume: boolean, followMore = true) {
     clear();
+    moreToken++;
+    following = followMore;
+    lastMoreCheck = -1;
     player.clearOffer();
     sentences = found;
     if (!sentences.length) {
@@ -126,7 +132,7 @@ export function createReader(opts: ReaderOptions) {
       const saved = await loadPosition(readingKey);
       if (saved && saved.total === sentences.length && saved.sid > 0 && saved.sid < sentences.length - 1) startAt = saved.sid;
     }
-    segments = sentences.map((s) => ({ text: s.text, words: s.words.map((w) => w.text) }));
+    segments = sentences.map(toSegment);
     hoverPlay.active = true;
     hoverPlay.currentSid = -1;
     player.status('Starting…');
@@ -139,6 +145,84 @@ export function createReader(opts: ReaderOptions) {
       });
     }
     return { ok: true, count: sentences.length, startAt };
+  }
+
+  // ---------- text the page loads while it's being read (lazy-loaded blocks) ----------
+
+  let following = false;
+  let lastMoreCheck = -1;
+  let moreToken = 0;
+
+  const toSegment = (s: Sentence): SpeechSegment => ({ text: s.text, words: s.words.map((w) => w.text) });
+
+  /** Sentences on the page now that come after the last one being read. */
+  function findMore(): Sentence[] {
+    const last = sentences.at(-1)?.range;
+    if (!last) return [];
+    return opts.extract('page').filter((s) => {
+      try {
+        return last.comparePoint(s.range.startContainer, s.range.startOffset) > 0;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  function addSentences(more: Sentence[]): SpeechSegment[] {
+    sentences.push(...more);
+    const segs = more.map(toSegment);
+    segments.push(...segs);
+    return segs;
+  }
+
+  /** Near the end: append newly loaded text to the session so reading carries on without a pause. */
+  function checkForMore(sid: number) {
+    if (!following || sid < sentences.length - 3 || sid <= lastMoreCheck) return;
+    lastMoreCheck = sid;
+    setTimeout(() => {
+      const more = findMore();
+      if (more.length) send({ type: 'append', segments: addSentences(more) }).catch(() => {});
+    }, 0);
+  }
+
+  /**
+   * At the end: scroll on (pages load their next blocks on scroll) and wait briefly for more text,
+   * up to three screens or the bottom of the page.
+   */
+  async function continueAfterEnd(): Promise<boolean> {
+    const token = ++moreToken;
+    const last = sentences.at(-1)?.range;
+    if (!following || !last) return false;
+    let moved = true;
+    for (let t = 0; t < 12; t++) {
+      if (t % 2 === 0 && t < 6 && moved) moved = scrollPastEnd(last);
+      await new Promise((r) => setTimeout(r, 250));
+      if (token !== moreToken) return true; // stopped or restarted meanwhile: nothing more to do here
+      const more = findMore();
+      if (more.length) {
+        const from = sentences.length;
+        addSentences(more);
+        send({ type: 'read', segments, startAt: from, title: document.title });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Scrolls the container holding `range` down by most of a screen. False when it's already at the bottom. */
+  function scrollPastEnd(range: Range): boolean {
+    const n = range.endContainer;
+    let box: Element = document.scrollingElement ?? document.documentElement;
+    for (let el: Element | null = n instanceof Element ? n : n.parentElement; el; el = el.parentElement) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) {
+        box = el;
+        break;
+      }
+    }
+    const before = box.scrollTop;
+    box.scrollTop += box.clientHeight * 0.8;
+    return box.scrollTop !== before;
   }
 
   /** Continues the current reading from sentence `sid` (the hover play button). */
@@ -229,6 +313,7 @@ export function createReader(opts: ReaderOptions) {
     player.progress(e.sid, e.total);
     debugState(e.sid, e.total);
     if (readingKey) savePosition(readingKey, e.sid, e.total);
+    checkForMore(e.sid);
     if (!e.live) tick();
   }
 
@@ -260,12 +345,19 @@ export function createReader(opts: ReaderOptions) {
 
   // ---------- messages ----------
 
+  function finished(text: string) {
+    clear();
+    player.clearOffer();
+    player.status(text);
+    player.hideSoon();
+  }
+
   function handle(msg: TabEvent | ExtractCmd, respond: (r: unknown) => void): boolean | void {
     switch (msg.type) {
       case 'extract': {
         const mode = msg.mode === 'auto' ? (hasSelection() ? 'selection' : 'page') : msg.mode;
         selectionButton.hide();
-        start(opts.extract(mode), mode === 'page').then(respond);
+        start(opts.extract(mode), mode === 'page', mode === 'page').then(respond);
         return true;
       }
       case 'sentence':
@@ -289,13 +381,16 @@ export function createReader(opts: ReaderOptions) {
         player.status(msg.percent == null ? 'Loading voice…' : `Downloading voice ${msg.percent}%`);
         return;
       case 'ended':
-        if (readingKey) clearPosition(readingKey);
-      // falls through
+        player.status('Finishing…');
+        continueAfterEnd().then((more) => {
+          if (more) return;
+          if (readingKey) clearPosition(readingKey);
+          finished('Finished');
+        });
+        return;
       case 'stopped':
-        clear();
-        player.clearOffer();
-        player.status(msg.type === 'ended' ? 'Finished' : 'Stopped');
-        player.hideSoon();
+        moreToken++;
+        finished('Stopped');
         return;
       case 'notice':
         player.status(msg.message);
@@ -336,5 +431,5 @@ export function createReader(opts: ReaderOptions) {
     if (['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'Home', 'End', ' '].includes(e.key)) userScrolledAt = Date.now();
   });
 
-  return { start: (mode: 'page' | 'selection') => start(opts.extract(mode), mode === 'page') };
+  return { start: (mode: 'page' | 'selection') => start(opts.extract(mode), mode === 'page', mode === 'page') };
 }

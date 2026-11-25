@@ -564,6 +564,13 @@ const actions: Record<HostCommand['type'], (m: any) => unknown> = {
   next: () => session && jump(session.idx + 1),
   prev: () => session && jump(session.idx - 1),
   jump: (m) => jump(m.sid),
+  append: (m) => {
+    const s = session;
+    if (!s || s.tabId !== m.tabId) return { ok: false };
+    s.segments.push(...m.segments);
+    if (s.kind !== 'system') pump(s); // system voices pick up the next segment by themselves
+    return { ok: true, total: s.segments.length };
+  },
   stop,
   status,
   env: async () => ({

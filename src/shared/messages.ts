@@ -34,6 +34,8 @@ export type HostCommand =
   | { type: 'settings'; settings: Settings }
   | { type: 'toggle' | 'pause' | 'resume' | 'next' | 'prev' | 'stop' | 'status' | 'env' }
   | { type: 'jump'; sid: number }
+  /** More sentences for the session reading this tab (text the page loaded while it was being read). */
+  | { type: 'append'; tabId: number; segments: SpeechSegment[] }
   | { type: 'benchmark'; engine: EngineId }
   | { type: 'speakSample'; text: string; settings: Settings };
 
