@@ -1,6 +1,6 @@
 // Read-along UI shared by the content script and the PDF viewer:
 // highlighting, word timing, the floating player, and resume-where-you-left-off.
-import type { Sentence } from './extract';
+import { revealTab, type Sentence } from './extract';
 import { Player } from './player';
 import { SelectionButton } from './selectionButton';
 import { HoverPlay } from './hoverPlay';
@@ -219,9 +219,12 @@ export function createReader(opts: ReaderOptions) {
     current = { sid: e.sid, starts, lastWord: -1, raf: 0, live: !!e.live };
     hoverPlay.currentSid = e.sid;
     setClock(0, e.rate, false);
+    // In a closed tab: switch to it first, then scroll once it has laid out.
+    const switched = revealTab(s.range);
     highlight('tts-sentence', s.range);
     highlight('tts-word', null);
-    follow(s.range);
+    if (switched) requestAnimationFrame(() => follow(s.range));
+    else follow(s.range);
     updateLocate();
     player.status(`${e.sid + 1} / ${e.total}`);
     player.progress(e.sid, e.total);

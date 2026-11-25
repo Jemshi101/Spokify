@@ -51,6 +51,7 @@ ${[
 // Like an e-learning lesson (Articulate Rise): content scrolls inside a panel, blocks are nested deep,
 // a closed accordion hides a long transcript that must not be read, and the longest text sits in a
 // tab panel 12 levels below its lesson block, with screen-reader-only "(opens in a new tab)" in a link.
+// ARIA tabs: the closed tab is read too, and switched to when reading reaches it.
 const deep = (html) => '<div><div><div class="row"><div class="col"><div class="view"><div>' + html + '</div></div></div></div></div></div>';
 const COURSE = `<!doctype html><html><head><title>Lesson</title><style>html,body{margin:0;height:100%;overflow:hidden}#scroller{height:100%;overflow:auto}.gap{height:1600px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}</style></head><body>
 <header class="bar"><h1>Introduction to agents</h1></header>
@@ -60,9 +61,18 @@ ${[
   '<h2>Agents versus chatbots</h2><p>Chatbots follow fixed scripts, answer one question at a time, and stay inside a single source of data. Agents, by contrast, plan several steps, call tools, and keep going until the task is finished.</p>',
   '<div class="tabs">' + '<div>'.repeat(4) + '<div class="tab-panel"><p>Business users can build agents without code, using tools like <a href="#">Agent Designer<span class="sr">(opens in a new tab)</span></a> and visual workflow builders, which guide them step by step, suggest actions, connect to data, and publish the finished agent for the whole team.</p><p>Developers, meanwhile, write agents in code with an open-source kit, test them locally, deploy them to managed runtimes, and watch them with logs, traces, and evaluations.</p></div><div class="tab-panel" style="display:none"><p>Hidden tab text.</p></div>' + '</div>'.repeat(4) + '</div>',
   '<section class="accordion"><button>Show transcript</button><section class="accordion__content" style="display:none"><p>Speaker one: this hidden transcript is long, much longer than anything else on the page, and it rambles on about many things, one after another, with commas, clauses, asides, and more commas, so that a text-length score would pick it first.</p><p>Speaker two: indeed, and it keeps going, sentence after sentence, paragraph after paragraph, none of which is visible on the screen.</p></section></section>',
+  '<div class="aria-tabs"><div role="tablist"><button role="tab" id="tab-a" aria-controls="panel-a" aria-selected="true">Overview</button><button role="tab" id="tab-b" aria-controls="panel-b" aria-selected="false">Pricing</button></div><div role="tabpanel" id="panel-a"><p>The overview tab says what agents do.</p></div><div role="tabpanel" id="panel-b" hidden><p>The pricing tab explains what agents cost to run.</p></div></div>',
   '<h2>Key takeaway</h2><p>Agents plan, use tools, and carry a task through to the end, within the limits you set. They are used for travel, scheduling, support, and software work.</p>',
 ].map((b) => '<div class="block">' + deep(b) + '</div>').join('\n')}
-</div></main></div></body></html>`;
+</div></main></div>
+<script>
+for (const t of document.querySelectorAll('[role=tab]')) t.onclick = () => {
+  for (const u of document.querySelectorAll('[role=tab]')) {
+    u.setAttribute('aria-selected', String(u === t));
+    document.getElementById(u.getAttribute('aria-controls')).hidden = u !== t;
+  }
+};
+</script></body></html>`;
 const OTHER = '<!doctype html><title>Other</title><p>Another page.</p>';
 
 let pdfBytes = null;
@@ -528,8 +538,13 @@ try {
       cs[0] === 'Introduction to agents' && cs.filter((t) => t === 'Introduction to agents').length === 1 && cs.includes('Key takeaway') && cs.includes('Agents versus chatbots') && !cs.some((t) => /Speaker|opens in a new tab|Hidden tab/.test(t))
         && cs.some((t) => /like Agent Designer and visual/.test(t)),
       JSON.stringify(cs));
+    const tabOrder = ['Overview', 'The overview tab says what agents do.', 'Pricing', 'The pricing tab explains what agents cost to run.'].map((t) => cs.indexOf(t));
+    check('closed tabs are read, each after its tab name', tabOrder.every((i, k) => i >= 0 && (k === 0 || i === tabOrder[k - 1] + 1)), JSON.stringify(tabOrder));
     const scrolled = await waitFor(() => page.evaluate(() => document.getElementById('scroller').scrollTop > 500), 20000);
     check('auto-scroll follows text inside a scrolling panel', !!scrolled, `panel scrollTop ${await page.evaluate(() => Math.round(document.getElementById('scroller').scrollTop))}`);
+    const atPricing = await waitFor(async () => /pricing tab explains/.test((await state()).sentence ?? ''), 60000);
+    const shown = await page.evaluate(() => ({ selected: document.getElementById('tab-b').getAttribute('aria-selected'), visible: document.getElementById('panel-b').checkVisibility(), other: document.getElementById('panel-a').hidden }));
+    check('reading switches to a closed tab when it gets there', !!atPricing && shown.selected === 'true' && shown.visible && shown.other, JSON.stringify({ atPricing: !!atPricing, ...shown }));
     await call({ type: 'host', payload: { type: 'stop' } });
     await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
   }

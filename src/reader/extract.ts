@@ -148,6 +148,36 @@ export interface CollectOptions {
   brText?: string | ((br: Element) => string);
 }
 
+// ---------- tabs ----------
+
+/** The tab button that shows this panel (ARIA tabs: aria-controls on the tab, or aria-labelledby on the panel). */
+export function tabFor(panel: Element): HTMLElement | null {
+  const doc = panel.ownerDocument;
+  const byControls = panel.id ? doc.querySelector<HTMLElement>(`[role=tab][aria-controls="${CSS.escape(panel.id)}"]`) : null;
+  if (byControls) return byControls;
+  const by = panel.getAttribute('aria-labelledby');
+  const tab = by ? doc.getElementById(by.split(/\s+/)[0]) : null;
+  return tab?.getAttribute('role') === 'tab' ? tab : null;
+}
+
+const isTabPanel = (el: Element) => el.getAttribute('role') === 'tabpanel' && !!tabFor(el);
+
+/**
+ * If the range is in a closed tab (or is a tab's name), switches to that tab so it can be seen and
+ * highlighted. Returns true when it clicked a tab.
+ */
+export function revealTab(range: Range): boolean {
+  const n = range.startContainer;
+  const el = n instanceof Element ? n : n.parentElement;
+  const tab = (el?.closest('[role=tab]') as HTMLElement | null) ?? (() => {
+    const panel = el?.closest('[role=tabpanel]');
+    return panel ? tabFor(panel) : null;
+  })();
+  if (!tab || tab.getAttribute('aria-selected') === 'true') return false;
+  tab.click();
+  return true;
+}
+
 const INLINE = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid', 'contents', 'ruby']);
 
 /**
@@ -180,6 +210,8 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
     acceptNode(n) {
       if (n.nodeType === Node.ELEMENT_NODE) {
         const el = n as Element;
+        // Tab panels are read even when closed (the reader switches tabs as it reaches them).
+        if (el !== root && isTabPanel(el) && !range) return NodeFilter.FILTER_ACCEPT;
         if (el !== root && (el.matches(SKIP_SELECTOR) || isUnlikely(el) || styleOf(el) === 'none')) return NodeFilter.FILTER_REJECT;
         return el.tagName === 'BR' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
       }
@@ -190,6 +222,13 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
   });
 
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.nodeType === Node.ELEMENT_NODE && (n as Element).tagName !== 'BR') {
+      // A tab panel: its tab's name comes first, as a heading.
+      const label = textMap(tabFor(n as Element)!);
+      if (/[\p{L}\p{N}]/u.test(label.text)) paragraphs.push({ block: tabFor(n as Element)!, ...label });
+      cur = null;
+      continue;
+    }
     if (n.nodeType === Node.ELEMENT_NODE) {
       const t = brText(n as Element); // <br>
       if (cur && t && !cur.text.endsWith(t)) cur.text = cur.text.replace(/ $/, '') + t;
@@ -214,6 +253,20 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
     cur.text += t.nodeValue!.slice(from, to).replace(/\s+/g, ' ');
   }
   return paragraphs.filter((p) => /[\p{L}\p{N}]/u.test(p.text));
+}
+
+/** All text under an element as one paragraph's text map. */
+function textMap(el: Element): TextMap {
+  const map: TextMap = { text: '', parts: [] };
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let t = w.nextNode() as Text | null; t; t = w.nextNode() as Text | null) {
+    if (!t.nodeValue?.trim()) continue;
+    if (map.text && !map.text.endsWith(' ')) map.text += ' ';
+    map.parts.push({ node: t, start: map.text.length, from: 0 });
+    map.text += t.nodeValue.replace(/\s+/g, ' ');
+  }
+  map.text = map.text.trim() ? map.text : '';
+  return map;
 }
 
 function rangeFor(map: TextMap, start: number, end: number): Range {

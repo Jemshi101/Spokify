@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+
+- **Tabs are read too**: on pages with tabs (e-learning lessons such as Google Cloud Skills courses, docs sites), Spokify reads every tab in order, saying the tab's name first, and switches to each closed tab as it gets there, so you can see and follow the highlighted text. It works with any site that marks its tabs up the standard (accessible) way. Closed accordions are still skipped.
+
 ## 0.6.1
 
 - E-learning lessons with tabs (Articulate Rise, e.g. Google Cloud Skills courses): Spokify read only the open tab and skipped the introduction, headings and other blocks around it. The tab's text sits deeper in the page than Spokify looked, so it now looks further up and reads the whole lesson.
