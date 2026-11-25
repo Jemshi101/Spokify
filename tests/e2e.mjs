@@ -51,7 +51,8 @@ ${[
 // Like an e-learning lesson (Articulate Rise): content scrolls inside a panel, blocks are nested deep,
 // a closed accordion hides a long transcript that must not be read, and the longest text sits in a
 // tab panel 12 levels below its lesson block, with screen-reader-only "(opens in a new tab)" in a link.
-// ARIA tabs: the closed tab is read too, and switched to when reading reaches it.
+// ARIA tabs and an ARIA carousel: closed tabs and hidden slides are read too, and switched to when reading
+// reaches them. The takeaway has double spaces in its HTML (word highlights must not shift).
 const deep = (html) => '<div><div><div class="row"><div class="col"><div class="view"><div>' + html + '</div></div></div></div></div></div>';
 const COURSE = `<!doctype html><html><head><title>Lesson</title><style>html,body{margin:0;height:100%;overflow:hidden}#scroller{height:100%;overflow:auto}.gap{height:1600px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}</style></head><body>
 <header class="bar"><h1>Introduction to agents</h1></header>
@@ -62,7 +63,8 @@ ${[
   '<div class="tabs">' + '<div>'.repeat(4) + '<div class="tab-panel"><p>Business users can build agents without code, using tools like <a href="#">Agent Designer<span class="sr">(opens in a new tab)</span></a> and visual workflow builders, which guide them step by step, suggest actions, connect to data, and publish the finished agent for the whole team.</p><p>Developers, meanwhile, write agents in code with an open-source kit, test them locally, deploy them to managed runtimes, and watch them with logs, traces, and evaluations.</p></div><div class="tab-panel" style="display:none"><p>Hidden tab text.</p></div>' + '</div>'.repeat(4) + '</div>',
   '<section class="accordion"><button>Show transcript</button><section class="accordion__content" style="display:none"><p>Speaker one: this hidden transcript is long, much longer than anything else on the page, and it rambles on about many things, one after another, with commas, clauses, asides, and more commas, so that a text-length score would pick it first.</p><p>Speaker two: indeed, and it keeps going, sentence after sentence, paragraph after paragraph, none of which is visible on the screen.</p></section></section>',
   '<div class="aria-tabs"><div role="tablist"><button role="tab" id="tab-a" aria-controls="panel-a" aria-selected="true">Overview</button><button role="tab" id="tab-b" aria-controls="panel-b" aria-selected="false">Pricing</button></div><div role="tabpanel" id="panel-a"><p>The overview tab says what agents do.</p></div><div role="tabpanel" id="panel-b" hidden><p>The pricing tab explains what agents cost to run.</p></div></div>',
-  '<h2>Key takeaway</h2><p>Agents plan, use tools, and carry a task through to the end, within the limits you set. They are used for travel, scheduling, support, and software work.</p>',
+  '<div role="region" aria-roledescription="carousel" aria-label="Steps"><button aria-label="Previous slide">‹</button><button aria-label="Next slide">›</button><div class="slides"><div role="group" aria-roledescription="slide"><p>Step one is to plan the task.</p></div><div role="group" aria-roledescription="slide" hidden inert><p>Step two is to connect the tools.</p></div></div></div>',
+  '<h2>Key takeaway</h2><p>Agents  plan,  use tools, and carry a task through to the end, within the limits you set. They are used for travel, scheduling, support, and software work.</p>',
 ].map((b) => '<div class="block">' + deep(b) + '</div>').join('\n')}
 </div></main></div>
 <script>
@@ -72,6 +74,14 @@ for (const t of document.querySelectorAll('[role=tab]')) t.onclick = () => {
     document.getElementById(u.getAttribute('aria-controls')).hidden = u !== t;
   }
 };
+// Like Rise: the slide changes after an animation.
+const slides = [...document.querySelectorAll('[aria-roledescription=slide]')];
+const go = (d) => setTimeout(() => {
+  const i = slides.findIndex((s) => !s.hidden), j = Math.min(Math.max(i + d, 0), slides.length - 1);
+  slides.forEach((s, k) => { s.hidden = k !== j; s.inert = k !== j; });
+}, 300);
+document.querySelector('[aria-label="Next slide"]').onclick = () => go(1);
+document.querySelector('[aria-label="Previous slide"]').onclick = () => go(-1);
 </script></body></html>`;
 const OTHER = '<!doctype html><title>Other</title><p>Another page.</p>';
 
@@ -545,6 +555,20 @@ try {
     const atPricing = await waitFor(async () => /pricing tab explains/.test((await state()).sentence ?? ''), 60000);
     const shown = await page.evaluate(() => ({ selected: document.getElementById('tab-b').getAttribute('aria-selected'), visible: document.getElementById('panel-b').checkVisibility(), other: document.getElementById('panel-a').hidden }));
     check('reading switches to a closed tab when it gets there', !!atPricing && shown.selected === 'true' && shown.visible && shown.other, JSON.stringify({ atPricing: !!atPricing, ...shown }));
+    check('hidden carousel slides are read in order', cs.indexOf('Step two is to connect the tools.') === cs.indexOf('Step one is to plan the task.') + 1, JSON.stringify(cs.filter((t) => /^Step/.test(t))));
+    const atStep2 = await waitFor(async () => /Step two/.test((await state()).sentence ?? ''), 30000);
+    const slideShown = await waitFor(() => page.evaluate(() => !document.querySelectorAll('[aria-roledescription=slide]')[1].hidden), 3000);
+    check('reading moves the carousel to a hidden slide when it gets there', !!atStep2 && !!slideShown, JSON.stringify({ atStep2: !!atStep2, slideShown: !!slideShown }));
+    // Word highlights stay on whole words after collapsed double spaces.
+    await waitFor(async () => /^Agents\s+plan/.test((await state()).sentence ?? ''), 30000);
+    const words = new Set();
+    for (const end = Date.now() + 8000; Date.now() < end && /^Agents\s+plan/.test((await state()).sentence ?? '');) {
+      const w = (await state()).word;
+      if (w) words.add(w);
+      await sleep(30);
+    }
+    const bad = [...words].filter((w) => !/^[\p{L}\p{N}][\p{L}\p{N},.]*$/u.test(w) || !'Agents plan, use tools, and carry a task through to the end, within the limits you set.'.split(' ').includes(w.replace(/[,.]$/, '')) && !'Agents plan, use tools, and carry a task through to the end, within the limits you set.'.includes(w));
+    check('word highlights stay on whole words after double spaces', words.size >= 5 && !bad.length, JSON.stringify({ words: [...words], bad }));
     await call({ type: 'host', payload: { type: 'stop' } });
     await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
   }

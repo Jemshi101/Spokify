@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+
+- **Carousels are read too**: step-by-step boxes and slide carousels (e.g. "Click the arrows to learn more" in Rise lessons) are read slide by slide. Spokify moves the carousel to each slide as it gets there, so you can follow the highlight. Works with carousels built the standard accessible way.
+- The word highlight could sit one letter early (" comprehensiv" instead of "comprehensive") after a double space in the page's text. Positions now stay exact however the page's spacing looks.
+
 ## 0.7.0
 
 - **Tabs are read too**: on pages with tabs (e-learning lessons such as Google Cloud Skills courses, docs sites), Spokify reads every tab in order, saying the tab's name first, and switches to each closed tab as it gets there, so you can see and follow the highlighted text. It works with any site that marks its tabs up the standard (accessible) way. Closed accordions are still skipped.

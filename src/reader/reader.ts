@@ -1,6 +1,6 @@
 // Read-along UI shared by the content script and the PDF viewer:
 // highlighting, word timing, the floating player, and resume-where-you-left-off.
-import { revealTab, type Sentence } from './extract';
+import { reveal, type Sentence } from './extract';
 import { Player } from './player';
 import { SelectionButton } from './selectionButton';
 import { HoverPlay } from './hoverPlay';
@@ -219,12 +219,11 @@ export function createReader(opts: ReaderOptions) {
     current = { sid: e.sid, starts, lastWord: -1, raf: 0, live: !!e.live };
     hoverPlay.currentSid = e.sid;
     setClock(0, e.rate, false);
-    // In a closed tab: switch to it first, then scroll once it has laid out.
-    const switched = revealTab(s.range);
     highlight('tts-sentence', s.range);
     highlight('tts-word', null);
-    if (switched) requestAnimationFrame(() => follow(s.range));
-    else follow(s.range);
+    follow(s.range);
+    // In a closed tab or a carousel slide that isn't shown: switch to it, then scroll to it once it's laid out.
+    reveal(s.range).then((switched) => switched && current?.sid === e.sid && requestAnimationFrame(() => follow(s.range)));
     updateLocate();
     player.status(`${e.sid + 1} / ${e.total}`);
     player.progress(e.sid, e.total);

@@ -132,7 +132,7 @@ interface Part {
   from: number;
 }
 
-interface TextMap {
+export interface TextMap {
   text: string;
   parts: Part[];
 }
@@ -148,7 +148,7 @@ export interface CollectOptions {
   brText?: string | ((br: Element) => string);
 }
 
-// ---------- tabs ----------
+// ---------- tabs and carousels ----------
 
 /** The tab button that shows this panel (ARIA tabs: aria-controls on the tab, or aria-labelledby on the panel). */
 export function tabFor(panel: Element): HTMLElement | null {
@@ -162,20 +162,59 @@ export function tabFor(panel: Element): HTMLElement | null {
 
 const isTabPanel = (el: Element) => el.getAttribute('role') === 'tabpanel' && !!tabFor(el);
 
-/**
- * If the range is in a closed tab (or is a tab's name), switches to that tab so it can be seen and
- * highlighted. Returns true when it clicked a tab.
- */
-export function revealTab(range: Range): boolean {
+/** Accessible carousels (WAI-ARIA pattern): slides marked aria-roledescription="slide" inside a "carousel". */
+const SLIDE = '[aria-roledescription="slide" i]';
+const CAROUSEL = '[aria-roledescription="carousel" i]';
+const isSlide = (el: Element) => el.matches(SLIDE) && !!el.parentElement?.closest(CAROUSEL);
+const slideShown = (el: Element) => !(el as HTMLElement).hidden && !(el as HTMLElement).inert && el.getAttribute('aria-hidden') !== 'true';
+
+/** Panels hidden by a widget that the reader can open: read them, and reveal them when reading gets there. */
+const isRevealable = (el: Element) => isTabPanel(el) || isSlide(el);
+
+function elementOf(range: Range): Element | null {
   const n = range.startContainer;
-  const el = n instanceof Element ? n : n.parentElement;
-  const tab = (el?.closest('[role=tab]') as HTMLElement | null) ?? (() => {
-    const panel = el?.closest('[role=tabpanel]');
+  return n instanceof Element ? n : n.parentElement;
+}
+
+/** Switches to the tab this range is in (or names). Returns true when it clicked a tab. */
+function revealTab(el: Element): boolean {
+  const tab = (el.closest('[role=tab]') as HTMLElement | null) ?? (() => {
+    const panel = el.closest('[role=tabpanel]');
     return panel ? tabFor(panel) : null;
   })();
   if (!tab || tab.getAttribute('aria-selected') === 'true') return false;
   tab.click();
   return true;
+}
+
+/** Steps a carousel with its next/previous buttons until the slide holding `el` is the one shown. */
+async function revealSlide(el: Element): Promise<boolean> {
+  const slide = el.closest(SLIDE);
+  const carousel = slide?.parentElement?.closest(CAROUSEL);
+  if (!slide || !carousel || slideShown(slide)) return false;
+  const slides = [...carousel.querySelectorAll(SLIDE)].filter((s) => s.parentElement?.closest(CAROUSEL) === carousel);
+  const button = (dir: 'next' | 'prev') =>
+    carousel.querySelector<HTMLElement>(dir === 'next' ? 'button[aria-label*="next" i], [class*="next" i] button, button[class*="next" i]' : 'button[aria-label*="prev" i], [class*="prev" i] button, button[class*="prev" i]');
+  for (let guard = slides.length; guard > 0 && !slideShown(slide); guard--) {
+    const shown = slides.findIndex(slideShown);
+    const btn = button(shown >= 0 && shown > slides.indexOf(slide) ? 'prev' : 'next');
+    if (!btn) return false;
+    btn.click();
+    // Wait for the slide change (carousels animate before updating hidden/inert).
+    for (let t = 0; t < 30 && slides.findIndex(slideShown) === shown; t++) await new Promise((r) => setTimeout(r, 50));
+  }
+  return slideShown(slide);
+}
+
+/**
+ * If the range is in a closed tab or a carousel slide that isn't shown, switches to it so it can be
+ * seen and highlighted. Resolves true when something was switched.
+ */
+export async function reveal(range: Range): Promise<boolean> {
+  const el = elementOf(range);
+  if (!el) return false;
+  if (revealTab(el)) return true;
+  return revealSlide(el);
 }
 
 const INLINE = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid', 'contents', 'ruby']);
@@ -210,8 +249,8 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
     acceptNode(n) {
       if (n.nodeType === Node.ELEMENT_NODE) {
         const el = n as Element;
-        // Tab panels are read even when closed (the reader switches tabs as it reaches them).
-        if (el !== root && isTabPanel(el) && !range) return NodeFilter.FILTER_ACCEPT;
+        // Closed tabs and hidden carousel slides are read too (the reader opens them as it reaches them).
+        if (el !== root && !range && isRevealable(el)) return NodeFilter.FILTER_ACCEPT;
         if (el !== root && (el.matches(SKIP_SELECTOR) || isUnlikely(el) || styleOf(el) === 'none')) return NodeFilter.FILTER_REJECT;
         return el.tagName === 'BR' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
       }
@@ -223,9 +262,10 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
 
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     if (n.nodeType === Node.ELEMENT_NODE && (n as Element).tagName !== 'BR') {
-      // A tab panel: its tab's name comes first, as a heading.
-      const label = textMap(tabFor(n as Element)!);
-      if (/[\p{L}\p{N}]/u.test(label.text)) paragraphs.push({ block: tabFor(n as Element)!, ...label });
+      // A tab panel: its tab's name comes first, as a heading. A slide: just a new paragraph.
+      const tab = isTabPanel(n as Element) ? tabFor(n as Element) : null;
+      const label = tab && textMap(tab);
+      if (tab && label && /[\p{L}\p{N}]/u.test(label.text)) paragraphs.push({ block: tab, ...label });
       cur = null;
       continue;
     }
@@ -249,10 +289,28 @@ function collectParagraphs(root: Element, range?: Range, opts: CollectOptions = 
       if (t === range.startContainer) from = range.startOffset;
       if (t === range.endContainer) to = range.endOffset;
     }
-    cur.parts.push({ node: t, start: cur.text.length, from });
-    cur.text += t.nodeValue!.slice(from, to).replace(/\s+/g, ' ');
+    appendText(cur, t, from, to);
   }
   return paragraphs.filter((p) => /[\p{L}\p{N}]/u.test(p.text));
+}
+
+/**
+ * Appends node text [from, to) to the map with whitespace runs collapsed to one space. Each collapsed
+ * run starts a new part, so positions after it still point at the right characters in the node
+ * (otherwise "Gemini  functions" would shift every later highlight by a letter).
+ */
+export function appendText(map: TextMap, node: Text, from: number, to: number) {
+  const raw = node.nodeValue!;
+  const runs = /\s{2,}/g;
+  runs.lastIndex = from;
+  let i = from;
+  map.parts.push({ node, start: map.text.length, from: i });
+  for (let m = runs.exec(raw); m && m.index < to; m = runs.exec(raw)) {
+    map.text += raw.slice(i, m.index).replace(/\s/g, ' ') + ' ';
+    i = Math.min(m.index + m[0].length, to);
+    if (i < to) map.parts.push({ node, start: map.text.length, from: i });
+  }
+  if (i < to) map.text += raw.slice(i, to).replace(/\s/g, ' ');
 }
 
 /** All text under an element as one paragraph's text map. */
@@ -262,8 +320,7 @@ function textMap(el: Element): TextMap {
   for (let t = w.nextNode() as Text | null; t; t = w.nextNode() as Text | null) {
     if (!t.nodeValue?.trim()) continue;
     if (map.text && !map.text.endsWith(' ')) map.text += ' ';
-    map.parts.push({ node: t, start: map.text.length, from: 0 });
-    map.text += t.nodeValue.replace(/\s+/g, ' ');
+    appendText(map, t, 0, t.nodeValue.length);
   }
   map.text = map.text.trim() ? map.text : '';
   return map;
