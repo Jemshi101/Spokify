@@ -8,6 +8,7 @@ import { phonemizeEspeak, phonemizeText, phonemizeWord } from './phonemize';
 import { alignPhonemes, positionsToTimes } from './align';
 import { PiperVoice, estimateWordTimes } from './piper';
 import { SupertonicVoice, wordOffsets } from './supertonic';
+import { padLead } from './lead';
 
 // Never load code from a CDN: ONNX Runtime's .mjs/.wasm ship inside the extension.
 env.wasmPaths = new URL('ort/', self.location.href).href;
@@ -245,7 +246,7 @@ const synthWith = (engine: EngineId, text: string, words: string[], voice: strin
 async function generate(p: { text: string; words: string[]; voice: string; speed: number; engine: EngineChoice }) {
   const info = await load({ engine: p.engine, voice: p.voice });
   return {
-    ...(await synthWith(info.engine, p.text, p.words, p.voice, p.speed)),
+    ...padLead(await synthWith(info.engine, p.text, p.words, p.voice, p.speed)),
     engine: info.engine,
     voice: info.engine === 'piper' ? info.voice : p.voice,
     realtime: info.realtime,

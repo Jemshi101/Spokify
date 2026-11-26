@@ -46,6 +46,15 @@ export function wordOffsets(text: string, words: string[]): number[] {
   return out;
 }
 
+/**
+ * The predicted duration, capped for short texts. On a title like "Step one" the duration predictor
+ * allows about twice the time speech needs, and the model fills it with a quiet mumble in place of the
+ * first word. Sentences come out at about 14 characters a second, under the cap.
+ */
+export function maxDuration(text: string, predicted: number): number {
+  return Math.min(predicted, 0.3 + text.trim().length / 13);
+}
+
 type Progress = (file: string, loaded: number, total: number) => void;
 
 async function cachedFetch(url: string, onProgress?: Progress): Promise<ArrayBuffer> {
@@ -146,7 +155,7 @@ export class SupertonicVoice {
 
     const dur = (await this.dp.run({ text_ids: textIds, style_dp: style.dp, text_mask: textMask })).duration.data as Float32Array;
     // The reference default speaks at 1.05×; keep that as Spokify's 1×.
-    const seconds = dur[0] / (speed * 1.05);
+    const seconds = maxDuration(text, dur[0]) / (speed * 1.05);
     const textEmb = (await this.enc.run({ text_ids: textIds, style_ttl: style.ttl, text_mask: textMask })).text_emb;
 
     const { sample_rate, base_chunk_size } = this.cfg.ae;

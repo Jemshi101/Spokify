@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1
+
+- **Supertonic no longer mumbles short titles**: on short texts ("Step one", "Usage limits") the voice was given about twice the time it needed and filled it with a quiet mumble in place of the first word. Short texts now get a time that fits their length; sentences are unchanged.
+- **The first sound of a sentence isn't cut off**: speech started almost at the very beginning of each clip, and audio devices that need a moment to start (common on Windows and with Bluetooth headsets) dropped it. Every clip now starts with a short silence before the first word, and the word highlight follows it.
+
 ## 0.10.0
 
 - **Flip cards are read front and back**: each card's front is read, then its back, and Spokify turns the card over as it gets there. Stacks of cards ("1 of 4") are read card by card, moving the stack along. The "Click to flip" hint isn't read.

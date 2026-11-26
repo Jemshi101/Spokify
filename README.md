@@ -45,6 +45,7 @@ Supertonic 2 downloads from [supertone-oss-archive/supertonic-2](https://hugging
 | `src/host/host.ts` | Audio host: Kokoro path (worker RPC, 3-sentence lookahead, `<audio>` with pitch-preserving rate) and lite path (`speechSynthesis` + boundary events); media session |
 | `src/engine/worker.ts` | Kokoro (timestamped ONNX export, WebGPU fp32; fp16, q4f16 and uint8 garble the voice) or Piper; one model in memory, one request at a time; times the engine on load |
 | `src/engine/supertonic.ts` | Supertonic 2: cached download, text preprocessing, 4-model flow-matching pipeline on ONNX Runtime (WASM) |
+| `src/engine/lead.ts` | Adds a short silence before each clip's first sound, so audio devices don't cut it off |
 | `src/reader/selectionButton.ts` | The Read button next to selected text |
 | `src/reader/hoverPlay.ts` | The play button next to a hovered sentence while reading |
 | `src/engine/piper.ts` | Piper voices: cached download, espeak phonemes → ids, ONNX Runtime (WASM), estimated word times |
