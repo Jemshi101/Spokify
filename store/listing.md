@@ -53,7 +53,7 @@ LISTEN YOUR WAY
 • Floating player, media keys and keyboard shortcuts (Alt+Shift+R to read, Alt+Shift+P to pause, Alt+Shift+. and Alt+Shift+, to skip sentences)
 
 AI SUMMARIES
-• Summarize a page or a selection with the AI built into your browser (Chrome 138 or later), then have the summary read aloud
+• Summarize a page or a selection with the AI built into your browser (Chrome or Edge 138 or later, or Opera with Web AI turned on), then have the summary read aloud
 • The summary is made on your computer too
 
 PRIVATE BY DESIGN

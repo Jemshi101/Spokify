@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.1
+
+- **AI summaries in Opera**: Opera's Web AI provides the same on-device summarizer as Chrome, so summaries work in Opera once you turn on Settings → Web AI API (Macs with Apple silicon and 64-bit Windows). Until then, the summary panel and settings page explain how to turn it on, instead of saying Opera can't be used.
+- Ready for the Chrome Web Store and Opera add-ons: privacy policy, store listing, screenshots, and `npm run package` to build the upload.
+
 ## 0.11.0
 
 - **AI summaries**: summarize a page (or selected text) from the popup's **✨ Summarize** button, the right-click menu, or a shortcut you set. The summary appears in a panel on the page as it's written, with **Read aloud** and **Copy**. Spokify uses the AI built into your browser (Gemini Nano in Chrome, Edge's own model in Edge, version 138 or later), so pages never leave your computer and there's nothing to pay. The first time, the browser downloads its model (a few GB); the panel and the settings page have a Download button. Long pages are summarized part by part, then as a whole. Opera's Aria and other browsers' assistants can't be used by extensions, and the panel says so.

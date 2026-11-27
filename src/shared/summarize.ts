@@ -1,6 +1,6 @@
 // AI summaries with the browser's own on-device model, through the standard Summarizer API:
-// Gemini Nano in Chrome, Phi in Edge. Text never leaves the computer. Other browsers (Opera's Aria,
-// Firefox) don't offer a model to extensions.
+// Gemini Nano in Chrome, Phi in Edge, Opera's Web AI (Gemma, or Apple's model on Macs; off until the
+// user turns on Settings → Web AI API). Text never leaves the computer. Firefox offers no model.
 import type { SummaryLength, SummaryType } from './settings';
 
 /**
@@ -42,13 +42,20 @@ export const outputLanguage = (pageLang: string) => {
   return OUTPUT_LANGUAGES.includes(l) ? l : 'en';
 };
 
+const brands = () =>
+  (navigator as Navigator & { userAgentData?: { brands: { brand: string }[] } }).userAgentData?.brands.map((b) => b.brand) ?? [];
+const isOpera = () => brands().some((b) => /opera/i.test(b));
+
 /** Which AI this browser uses, for messages ("Chrome's built-in AI (Gemini Nano)"). */
 export function browserAi(): string {
-  const brands = (navigator as Navigator & { userAgentData?: { brands: { brand: string }[] } }).userAgentData?.brands.map((b) => b.brand) ?? [];
-  if (brands.some((b) => /edge/i.test(b))) return "Edge's built-in AI";
-  if (brands.some((b) => /opera/i.test(b))) return "Opera's built-in AI";
+  if (brands().some((b) => /edge/i.test(b))) return "Edge's built-in AI";
+  if (isOpera()) return "Opera's Web AI";
   return "Chrome's built-in AI (Gemini Nano)";
 }
+
+/** Opera keeps Web AI off until the user turns it on; it then installs its own engine and models. */
+const OPERA_ENABLE =
+  'Turn it on in Opera: Settings → Web AI API → Enable Web AI API (search the settings for "Web AI"). Opera then downloads an AI engine and models that run on your computer. It works on Macs with Apple silicon and 64-bit Windows.';
 
 export async function summaryState(lang = 'en', timeoutMs = 30000): Promise<SummaryState> {
   const s = api();
@@ -70,10 +77,12 @@ export async function summaryState(lang = 'en', timeoutMs = 30000): Promise<Summ
 export function stateMessage(state: SummaryState): string | null {
   switch (state) {
     case 'unsupported':
-      return "This browser doesn't give extensions a built-in AI. Summaries work in Chrome and Microsoft Edge (version 138 or later), which run a small AI model on your computer. Opera's Aria can't be used by extensions.";
+      if (isOpera()) return `This version of Opera has no Web AI. Update Opera, then: ${OPERA_ENABLE}`;
+      return "This browser doesn't give extensions a built-in AI. Summaries work in Chrome and Microsoft Edge (version 138 or later) and in Opera with Web AI turned on, which run a small AI model on your computer.";
     case 'no-answer':
       return `${browserAi()} didn't answer. It may still be starting up; try again in a minute.`;
     case 'unavailable':
+      if (isOpera()) return `Opera's Web AI is off or not installed yet. ${OPERA_ENABLE}`;
       return `${browserAi()} can't run on this computer, or it's turned off. It needs about 22 GB of free disk space and either a graphics card with more than 4 GB of memory or 16 GB of RAM.`;
     case 'downloadable':
       return `Summaries need ${browserAi()}, a one-time download of a few GB. It runs on your computer, so pages are never sent anywhere.`;

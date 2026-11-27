@@ -9,7 +9,7 @@ Spokify reads web pages, PDFs and Google Docs aloud with voices that run on your
 When you ask Spokify to read or summarize something, it reads the text of the current page (or the selection, PDF or Google Doc) inside your browser to turn it into speech or a summary. That text is processed on your computer and is never sent anywhere.
 
 - **Voices** run locally (Kokoro, Supertonic or Piper on WebGPU or WebAssembly, or your browser's built-in voices).
-- **AI summaries** use your browser's built-in on-device model (the Summarizer API, such as Gemini Nano in Chrome). Text isn't sent to Spokify or to any AI service by Spokify.
+- **AI summaries** use your browser's built-in on-device model (the Summarizer API, such as Gemini Nano in Chrome or Web AI in Opera). Text isn't sent to Spokify or to any AI service by Spokify.
 - **Google Docs**: to read a document, Spokify downloads its HTML export from `docs.google.com` with your existing Google sign-in, the same way your browser opens the document. The content stays on your computer.
 - **PDFs**: Spokify opens the PDF from its address in its own viewer. To check whether a link is a PDF, it may request the link's headers.
 

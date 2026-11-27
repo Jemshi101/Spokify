@@ -39,7 +39,10 @@ The store zip is `dist/` without the manifest `key` (the Chrome Web Store reject
 - PDFs: press Read on a PDF tab, or right-click a PDF link → **Read PDF aloud** (opens the built-in viewer)
 - Google Docs: press Read on a Docs tab; the document opens in Spokify's Docs reader in a new tab (Docs draws on a canvas, so it is read from its export with your Google sign-in)
 - Reading a page again resumes where you stopped (the player offers **Restart**)
-- **AI summary**: popup **✨ Summarize**, right-click **Summarize this page** / **Summarize selection**, or a shortcut you set. The summary shows in a panel on the page with **Read aloud** and **Copy**. It uses the browser's own on-device model through the standard Summarizer API (Gemini Nano in Chrome, Phi in Edge, 138+), so text never leaves the computer; long pages are summarized part by part, then together. Other browsers (Opera's Aria, Firefox) don't offer extensions a model, and the panel says so.
+- **AI summary**: popup **✨ Summarize**, right-click **Summarize this page** / **Summarize selection**, or a shortcut you set. The summary shows in a panel on the page with **Read aloud** and **Copy**. It uses the browser's own on-device model through the standard Summarizer API, so text never leaves the computer; long pages are summarized part by part, then together.
+  - **Chrome / Edge 138+**: Gemini Nano in Chrome, Phi in Edge. The browser downloads the model the first time (the panel and settings page have a Download button).
+  - **Opera**: Opera's **Web AI** (preview since October 2026; Gemma, or Apple's on-device model on Macs) provides the same API. It is off by default: Settings → **Web AI API** → **Enable Web AI API**, which installs Opera's inference engine and models. Macs with Apple silicon and 64-bit Windows only. Until it's on, the panel explains how to turn it on.
+  - Firefox and other browsers offer no model; the panel says so.
 - **Settings page** (popup → **All settings**): voice with a sample, speed, reading buttons, AI summaries (model status and download, style, length), shortcuts, storage, version
 
 First use downloads the voice (Kokoro ~330 MB, or a Piper voice ~63 MB; cached afterwards); the welcome page does this with a progress bar.
