@@ -20,6 +20,15 @@ Load `dist/` as an unpacked extension: `chrome://extensions` (or `opera://extens
 
 The manifest pins the extension id (`llacpmmoocpaoaijceajaknlbdedennp`) with a public `key`, so every build and folder is the same extension. To update without re-downloading voices, replace the folder's files (or load the new folder) and press reload in the extensions page; **removing** the extension deletes its downloaded voices (browser policy). The private key is in `.keys/` (git-ignored) and is only needed to pack a `.crx`.
 
+## Publish (Chrome Web Store, Opera add-ons)
+
+```sh
+npm run package        # release/spokify-X.Y.Z-store.zip (upload to both stores) + -source.zip (for Opera's reviewers)
+npm run store-images   # store/images/: 1280×800 screenshots, 440×280 promo tile, 1400×560 marquee (needs a build)
+```
+
+The store zip is `dist/` without the manifest `key` (the Chrome Web Store rejects it; each store assigns its own id). Listing text, permission justifications, privacy answers and reviewer notes are in [store/listing.md](store/listing.md); the privacy policy is [PRIVACY.md](PRIVACY.md).
+
 ## Use
 
 - Popup **Read page** / **Read selection**, right-click menu, or **Alt+Shift+R** (reads the selection if there is one)

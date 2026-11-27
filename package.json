@@ -8,7 +8,9 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc",
     "e2e": "node tests/e2e.mjs",
-    "icons": "node tools/icons.mjs"
+    "icons": "node tools/icons.mjs",
+    "package": "node tools/package.mjs",
+    "store-images": "node tools/store-images.mjs"
   },
   "keywords": [],
   "author": "",

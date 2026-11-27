@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Spokify",
   "version": "0.11.0",
-  "description": "Reads web pages aloud with natural voices that run locally (Kokoro). Read-along highlighting, background play.",
+  "description": "Reads web pages, PDFs and Google Docs aloud with natural voices that run on your computer. Read-along highlighting, no account.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "Spokify",
