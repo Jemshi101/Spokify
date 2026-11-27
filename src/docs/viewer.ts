@@ -8,6 +8,7 @@ import { docTitle, editUrl, exportUrl, parseDocUrl, scopeSelector } from './gdoc
 const params = new URLSearchParams(location.search);
 const ref = parseDocUrl(params.get('doc') ?? '');
 const autoplay = params.get('autoplay') === '1';
+const autoSummarize = params.get('summarize') === '1';
 // Tests serve a fixture instead of Google's export; only loopback URLs are accepted.
 const fixture = params.get('export');
 const source = fixture && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(fixture) ? fixture : ref ? exportUrl(ref) : null;
@@ -141,11 +142,13 @@ async function main() {
   });
   $('read').onclick = () => reader.start('page');
   const ok = await render();
-  if (ok && autoplay) {
+  if (ok && (autoplay || autoSummarize)) {
     const p = new URLSearchParams(location.search);
     p.delete('autoplay');
+    p.delete('summarize');
     history.replaceState(null, '', `${location.pathname}?${p}`);
-    reader.start('page');
+    if (autoSummarize) reader.summarize();
+    else reader.start('page');
   }
 }
 

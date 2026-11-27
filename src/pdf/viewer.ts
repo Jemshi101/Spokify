@@ -10,6 +10,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdfjs/pdf.worker.mj
 const params = new URLSearchParams(location.search);
 const fileUrl = params.get('file') ?? '';
 const autoplay = params.get('autoplay') === '1';
+const autoSummarize = params.get('summarize') === '1';
 
 const $ = (id: string) => document.getElementById(id)!;
 const pagesEl = $('pages');
@@ -228,9 +229,10 @@ async function main() {
   });
   $('read').onclick = () => reader.start('page');
   const ok = await render();
-  if (ok && autoplay) {
+  if (ok && (autoplay || autoSummarize)) {
     history.replaceState(null, '', location.pathname + `?file=${encodeURIComponent(fileUrl)}`);
-    reader.start('page');
+    if (autoSummarize) reader.summarize();
+    else reader.start('page');
   }
 }
 

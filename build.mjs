@@ -27,6 +27,7 @@ const builds = [
       host: 'src/host/host.ts',
       worker: 'src/engine/worker.ts',
       popup: 'src/popup/popup.ts',
+      options: 'src/options/options.ts',
       diag: 'src/diag/diag.ts',
       pdf: 'src/pdf/viewer.ts',
       welcome: 'src/welcome/welcome.ts',

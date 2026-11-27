@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0
+
+- **AI summaries**: summarize a page (or selected text) from the popup's **✨ Summarize** button, the right-click menu, or a shortcut you set. The summary appears in a panel on the page as it's written, with **Read aloud** and **Copy**. Spokify uses the AI built into your browser (Gemini Nano in Chrome, Edge's own model in Edge, version 138 or later), so pages never leave your computer and there's nothing to pay. The first time, the browser downloads its model (a few GB); the panel and the settings page have a Download button. Long pages are summarized part by part, then as a whole. Opera's Aria and other browsers' assistants can't be used by extensions, and the panel says so.
+- **Settings page** (popup → **All settings**): voice and engine with a **Play a sample** button, speed, the page buttons, AI summaries (whether your browser's AI is ready, download it, style: key points or a short paragraph, length), keyboard shortcuts, how much space downloaded voices take, and the version. The popup keeps the quick controls.
+- PDFs and Google Docs can be summarized too (they open in Spokify's reader first).
+
 ## 0.10.1
 
 - **Supertonic no longer mumbles short titles**: on short texts ("Step one", "Usage limits") the voice was given about twice the time it needed and filled it with a quiet mumble in place of the first word. Short texts now get a time that fits their length; sentences are unchanged.

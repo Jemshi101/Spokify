@@ -1,7 +1,9 @@
 // Read-along UI shared by the content script and the PDF viewer:
 // highlighting, word timing, the floating player, and resume-where-you-left-off.
-import { reveal, type Sentence } from './extract';
+import { extractPage, reveal, type Sentence } from './extract';
 import { Player } from './player';
+import { SummaryPanel } from './summaryPanel';
+import { browserAi, downloadModel, stateMessage, summarize, summaryState } from '../shared/summarize';
 import { SelectionButton } from './selectionButton';
 import { HoverPlay } from './hoverPlay';
 import { PIPER_VOICES, SUPERTONIC_VOICES, VOICES, loadSettings, onSettingsChanged, saveSettings } from '../shared/settings';
@@ -19,7 +21,7 @@ export interface ReaderOptions {
 }
 
 /** 'auto' (the keyboard shortcut): the selection if there is one, else the page. */
-type ExtractCmd = { type: 'extract'; mode: 'page' | 'selection' | 'auto' };
+type ExtractCmd = { type: 'extract' | 'summarize'; mode: 'page' | 'selection' | 'auto' };
 
 const hasSelection = () => (getSelection()?.toString().trim().length ?? 0) >= 3;
 
@@ -113,6 +115,7 @@ export function createReader(opts: ReaderOptions) {
   // ---------- reading ----------
 
   async function start(found: Sentence[], resume: boolean, followMore = true) {
+    summaryDone();
     clear();
     moreToken++;
     following = followMore;
@@ -235,6 +238,105 @@ export function createReader(opts: ReaderOptions) {
     send({ type: 'read', segments, startAt: sid, title: document.title });
   }
 
+  // ---------- AI summary ----------
+
+  let summaryJob: AbortController | null = null;
+  /** True while the summary (not the page) is being read aloud. */
+  let readingSummary = false;
+  const summaryPanel = new SummaryPanel({
+    onRead: (body) => {
+      if (readingSummary) return void send({ type: 'host', payload: { type: 'stop' } });
+      const found = extractPage(undefined, { root: body });
+      if (!found.length) return;
+      start(found, false, false);
+      readingSummary = true;
+      summaryPanel.setReading(true);
+    },
+    onClose: () => {
+      summaryJob?.abort();
+      summaryJob = null;
+      if (readingSummary) send({ type: 'host', payload: { type: 'stop' } });
+    },
+  });
+
+  /** Exposes the summary's state on <html data-tts-summary> for tests/e2e.mjs. */
+  function summaryDebug(state: string, text = '') {
+    document.documentElement.dataset.ttsSummary = JSON.stringify({ state, text });
+  }
+
+  function summaryDone() {
+    readingSummary = false;
+    summaryPanel.setReading(false);
+  }
+
+  /** Summarizes the page (or the selection) in the summary panel, with the browser's built-in AI. */
+  async function summarizeNow(mode: 'page' | 'selection', found = opts.extract(mode)): Promise<{ ok: boolean; count?: number }> {
+    summaryJob?.abort();
+    const job = (summaryJob = new AbortController());
+    summaryPanel.open(mode === 'selection' ? 'Summary of the selection' : 'Summary of this page');
+    const text = found.map((s) => s.text);
+    if (text.join(' ').length < 200) {
+      summaryPanel.error(found.length ? 'There is too little text here to summarize.' : 'Nothing to summarize here.');
+      summaryDebug('too-short');
+      return { ok: false };
+    }
+    const lang = document.documentElement.lang || navigator.language;
+    const state = await summaryState(lang);
+    if (job.signal.aborted) return { ok: false };
+    summaryDebug(state);
+    if (state === 'downloadable' || state === 'downloading') {
+      summaryPanel.error(stateMessage(state)!, {
+        label: state === 'downloadable' ? 'Download' : 'Show progress',
+        // Runs in the click: browsers only start the download from a user gesture.
+        run: () => {
+          summaryPanel.setAction(null);
+          summaryPanel.status(`Downloading ${browserAi()}…`, 0);
+          downloadModel((f) => summaryPanel.status(`Downloading ${browserAi()}… ${Math.round(f * 100)}%`, f), lang).then(
+            () => void (job === summaryJob && summarizeNow(mode, found)),
+            (e) => void (job === summaryJob && summaryPanel.error(`The download didn't start: ${(e as Error).message}`, openSettingsAction)),
+          );
+        },
+      });
+      return { ok: false };
+    }
+    if (state !== 'available') {
+      summaryPanel.error(stateMessage(state)!);
+      return { ok: false };
+    }
+    const s = await loadSettings();
+    summarize({
+      sentences: text,
+      title: document.title,
+      lang,
+      type: s.summaryType,
+      length: s.summaryLength,
+      signal: job.signal,
+      onProgress: (i, n) => summaryPanel.status(`Summarizing part ${i} of ${n}…`, (i - 1) / n),
+      onText: (t) => {
+        summaryPanel.status('');
+        summaryPanel.setText(t);
+      },
+    }).then(
+      (r) => {
+        if (job !== summaryJob) return;
+        summaryPanel.setText(r.text);
+        summaryDebug(r.partial ? 'done-partial' : 'done', r.text);
+        summaryPanel.done(
+          `Made on this computer by ${browserAi()}. It can make mistakes.` +
+            (r.partial ? ' The page is very long, so only its first part is summarized.' : ''),
+        );
+      },
+      (e) => {
+        if (job !== summaryJob || job.signal.aborted) return;
+        summaryDebug('error', String((e as Error).message ?? e));
+        summaryPanel.error(`Couldn't summarize: ${(e as Error).message ?? e}`);
+      },
+    );
+    return { ok: true, count: found.length };
+  }
+
+  const openSettingsAction = { label: 'Open settings', run: () => send({ type: 'openSettings', section: 'summaries' }) };
+
   // ---------- highlighting ----------
 
   function highlight(name: string, range: Range | null | undefined) {
@@ -346,6 +448,7 @@ export function createReader(opts: ReaderOptions) {
   // ---------- messages ----------
 
   function finished(text: string) {
+    summaryDone();
     clear();
     player.clearOffer();
     player.status(text);
@@ -358,6 +461,12 @@ export function createReader(opts: ReaderOptions) {
         const mode = msg.mode === 'auto' ? (hasSelection() ? 'selection' : 'page') : msg.mode;
         selectionButton.hide();
         start(opts.extract(mode), mode === 'page', mode === 'page').then(respond);
+        return true;
+      }
+      case 'summarize': {
+        const mode = msg.mode === 'auto' ? (hasSelection() ? 'selection' : 'page') : msg.mode;
+        selectionButton.hide();
+        summarizeNow(mode).then(respond);
         return true;
       }
       case 'sentence':
@@ -396,6 +505,7 @@ export function createReader(opts: ReaderOptions) {
         player.status(msg.message);
         return;
       case 'error':
+        summaryDone();
         clear();
         player.status(`Error: ${msg.message}`);
         player.hideSoon(8000);
@@ -431,5 +541,8 @@ export function createReader(opts: ReaderOptions) {
     if (['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'Home', 'End', ' '].includes(e.key)) userScrolledAt = Date.now();
   });
 
-  return { start: (mode: 'page' | 'selection') => start(opts.extract(mode), mode === 'page', mode === 'page') };
+  return {
+    start: (mode: 'page' | 'selection') => start(opts.extract(mode), mode === 'page', mode === 'page'),
+    summarize: () => summarizeNow('page'),
+  };
 }

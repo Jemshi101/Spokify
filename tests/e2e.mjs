@@ -632,6 +632,87 @@ try {
     await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
   }
 
+  // --- AI summaries. The test browser has no on-device model, so first check the message, then
+  // stand in a fake Summarizer in the content script's world (the API shape Chrome and Edge share).
+  {
+    await setSettings({ engine, voice: 'af_heart', speed: 2 });
+    await page.goto(`${base}/article`);
+    await page.bringToFront();
+    const summary = () => page.evaluate(() => JSON.parse(document.documentElement.dataset.ttsSummary ?? '{}'));
+    await call({ type: 'summarize', mode: 'page', tabId });
+    const none = await waitFor(async () => (await summary()).state, 10000);
+    check('summaries explain when the browser has no AI model', none === 'unavailable' || none === 'unsupported', none);
+
+    const fake = (quota) =>
+      ext.evaluate(
+        (tabId, quota) =>
+          chrome.scripting.executeScript({
+            target: { tabId },
+            args: [quota],
+            func: (quota) => {
+              const calls = (globalThis.__sumCalls = []);
+              const model = (o) => ({
+                inputQuota: quota,
+                measureInputUsage: async (t) => Math.ceil(t.length / 4),
+                summarize: async (t) => (calls.push(['part', t.length]), 'Part summary.'),
+                async *summarizeStreaming(t) {
+                  calls.push(['final', o.type, o.length, t.length]);
+                  yield '* Reading aloud helps ';
+                  yield 'you focus.\n* Spokify reads **whole** pages.';
+                },
+                destroy() {},
+              });
+              Object.defineProperty(globalThis, 'Summarizer', {
+                configurable: true,
+                writable: true,
+                value: { availability: async () => 'available', create: async (o) => model(o) },
+              });
+            },
+          }),
+        tabId,
+        quota,
+      );
+    const calls = () => ext.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.__sumCalls }))[0].result, tabId);
+
+    await fake(4000);
+    await call({ type: 'summarize', mode: 'page', tabId });
+    const done = await waitFor(async () => ((await summary()).state === 'done' ? await summary() : null), 10000);
+    const c1 = await calls();
+    check('summarizes the page in one go when it fits', done?.text.includes('helps you focus') && c1.length === 1 && c1[0][0] === 'final' && c1[0][1] === 'key-points',
+      JSON.stringify({ state: done?.state, calls: c1 }));
+
+    // Read aloud: the panel's first footer button.
+    const rect = await page.evaluate(() => {
+      const host = [...document.documentElement.children].find((e) => e.style.top === '16px' && e.style.right === '16px');
+      const r = host?.getBoundingClientRect();
+      return r && { x: r.left + 50, y: r.bottom - 26 };
+    });
+    if (rect) await page.mouse.click(rect.x, rect.y);
+    const spoken = await waitFor(async () => (await state()).sentence, 15000);
+    check('reads the summary aloud from the panel', spoken === 'Reading aloud helps you focus.', JSON.stringify(spoken));
+    await call({ type: 'host', payload: { type: 'stop' } });
+
+    await fake(60); // a tiny limit: the page is summarized part by part, then the parts together
+    await call({ type: 'summarize', mode: 'page', tabId });
+    await waitFor(async () => (await summary()).state === 'done', 10000);
+    const c2 = await calls();
+    const parts = c2.filter((c) => c[0] === 'part').length;
+    check('summarizes a long page part by part', parts >= 2 && c2.at(-1)[0] === 'final', `${parts} parts, then ${c2.at(-1)?.[0]}`);
+    await setSettings({ engine, voice: 'af_heart', speed: 2.5 });
+  }
+
+  // --- settings page
+  {
+    const opt = await browser.newPage();
+    await opt.goto(`chrome-extension://${extId}/options.html#summaries`);
+    const ai = await waitFor(() => opt.$eval('#aiStatus', (e) => (e.dataset.state ? e.textContent : '')), 10000);
+    const shortcuts = await opt.$$eval('#shortcutList tr', (rows) => rows.length);
+    await opt.select('#summaryLength', 'short');
+    const saved = await waitFor(async () => (await ext.evaluate(() => chrome.storage.sync.get('settings'))).settings?.summaryLength === 'short', 5000);
+    check('settings page shows the AI status and shortcuts, and saves changes', !!ai && shortcuts >= 5 && !!saved, `${shortcuts} shortcuts, AI: "${ai?.slice(0, 50)}…"`);
+    await opt.close();
+  }
+
   // --- welcome page
   const welcome = await browser.newPage();
   await welcome.goto(`chrome-extension://${extId}/welcome.html`);

@@ -98,9 +98,13 @@ function isViewer(url?: string) {
   return !!url && [PDF_VIEWER, DOCS_VIEWER].some((v) => url.startsWith(chrome.runtime.getURL(v)));
 }
 
+/** What a viewer opened for a tab should do once it has loaded. */
+type ViewerStart = 'read' | 'summarize';
+const startParam = (start: ViewerStart) => (start === 'summarize' ? 'summarize' : 'autoplay');
+
 /** Google Docs draws on a canvas: read its export in our reader, in a new tab next to the editor. */
-async function openDoc(tab: chrome.tabs.Tab) {
-  const p = new URLSearchParams({ doc: tab.url!, title: tab.title ?? '', autoplay: '1' });
+async function openDoc(tab: chrome.tabs.Tab, start: ViewerStart = 'read') {
+  const p = new URLSearchParams({ doc: tab.url!, title: tab.title ?? '', [startParam(start)]: '1' });
   await chrome.tabs.create({ url: `${chrome.runtime.getURL(DOCS_VIEWER)}?${p}`, index: tab.index + 1, openerTabId: tab.id });
 }
 
@@ -115,8 +119,8 @@ async function looksLikePdf(url: string): Promise<boolean> {
   }
 }
 
-async function openPdf(tabId: number | undefined, url: string) {
-  const viewer = `${chrome.runtime.getURL(PDF_VIEWER)}?file=${encodeURIComponent(url)}&autoplay=1`;
+async function openPdf(tabId: number | undefined, url: string, start: ViewerStart = 'read') {
+  const viewer = `${chrome.runtime.getURL(PDF_VIEWER)}?file=${encodeURIComponent(url)}&${startParam(start)}=1`;
   if (tabId == null) await chrome.tabs.create({ url: viewer });
   else await chrome.tabs.update(tabId, { url: viewer });
 }
@@ -127,6 +131,32 @@ async function setReadingTab(tabId: number | null, url?: string) {
 
 async function readingTab(): Promise<{ tabId: number; url: string } | null> {
   return ((await chrome.storage.session.get('reading')).reading as { tabId: number; url: string } | null) ?? null;
+}
+
+/** Sends a read or summarize command to the tab's reader, opening our PDF / Google Docs reader when needed. */
+async function toReader(msg: { tabId?: number; mode: string }, start: ViewerStart) {
+  const tabId: number = msg.tabId ?? (await activeTabId());
+  const tab = await chrome.tabs.get(tabId);
+  const cmd = { type: start === 'summarize' ? 'summarize' : 'extract', mode: msg.mode };
+  if (isViewer(tab.url)) return chrome.runtime.sendMessage({ target: 'tab', tabId, payload: cmd });
+  if (parseDocUrl(tab.url)) {
+    await openDoc(tab, start);
+    return { ok: true, docs: true };
+  }
+  if (tab.url && /\.pdf($|[?#])/i.test(tab.url) && (await looksLikePdf(tab.url))) {
+    await openPdf(tabId, tab.url, start);
+    return { ok: true, pdf: true };
+  }
+  try {
+    return await withTimeout(sendToTab(tabId, cmd), EXTRACT_TIMEOUT_MS, "the page didn't respond. Reload it and try again.");
+  } catch (e) {
+    // Chrome's built-in PDF viewer can't be scripted: reopen the PDF in ours.
+    if (tab.url && (await looksLikePdf(tab.url))) {
+      await openPdf(tabId, tab.url, start);
+      return { ok: true, pdf: true };
+    }
+    throw e;
+  }
 }
 
 const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) => Promise<unknown>> = {
@@ -144,29 +174,11 @@ const handlers: Record<string, (msg: any, sender: chrome.runtime.MessageSender) 
     return toHost({ type: 'append', tabId, segments: msg.segments });
   },
   // From popup / shortcuts: ask a tab to extract its text and start reading.
-  async extract(msg) {
-    const tabId: number = msg.tabId ?? (await activeTabId());
-    const tab = await chrome.tabs.get(tabId);
-    const cmd = { type: 'extract', mode: msg.mode };
-    if (isViewer(tab.url)) return chrome.runtime.sendMessage({ target: 'tab', tabId, payload: cmd });
-    if (parseDocUrl(tab.url)) {
-      await openDoc(tab);
-      return { ok: true, docs: true };
-    }
-    if (tab.url && /\.pdf($|[?#])/i.test(tab.url) && (await looksLikePdf(tab.url))) {
-      await openPdf(tabId, tab.url);
-      return { ok: true, pdf: true };
-    }
-    try {
-      return await withTimeout(sendToTab(tabId, cmd), EXTRACT_TIMEOUT_MS, "the page didn't respond. Reload it and try again.");
-    } catch (e) {
-      // Chrome's built-in PDF viewer can't be scripted: reopen the PDF in ours.
-      if (tab.url && (await looksLikePdf(tab.url))) {
-        await openPdf(tabId, tab.url);
-        return { ok: true, pdf: true };
-      }
-      throw e;
-    }
+  extract: (msg) => toReader(msg, 'read'),
+  // From popup / menu / shortcut: summarize the tab's page (or selection) in its summary panel.
+  summarize: (msg) => toReader(msg, 'summarize'),
+  async openSettings(msg) {
+    await chrome.tabs.create({ url: chrome.runtime.getURL(`options.html${msg.section ? `#${msg.section}` : ''}`) });
   },
   async toTab(msg) {
     if (msg.payload.type === 'ended' || msg.payload.type === 'stopped') {
@@ -237,6 +249,7 @@ chrome.commands.onCommand.addListener((command) => {
   const run = (p: Promise<unknown>) => p.catch((e) => console.warn(command, e));
   // The shortcut reads the selection when there is one, else the page.
   if (command === 'read-page') run(handlers.extract({ mode: 'auto' }, {}));
+  if (command === 'summarize-page') run(handlers.summarize({ mode: 'auto' }, {}));
   if (command === 'toggle-pause') run(toHostIfRunning({ type: 'toggle' }));
   if (command === 'next-sentence') run(toHostIfRunning({ type: 'next' }));
   if (command === 'prev-sentence') run(toHostIfRunning({ type: 'prev' }));
@@ -246,6 +259,8 @@ chrome.runtime.onInstalled.addListener((details) => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: 'read-selection', title: 'Read selection aloud', contexts: ['selection'] });
     chrome.contextMenus.create({ id: 'read-page', title: 'Read this page aloud', contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'summarize-selection', title: 'Summarize selection', contexts: ['selection'] });
+    chrome.contextMenus.create({ id: 'summarize-page', title: 'Summarize this page', contexts: ['page'] });
     chrome.contextMenus.create({
       id: 'read-pdf-link',
       title: 'Read PDF aloud',
@@ -262,6 +277,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     return;
   }
   if (tab?.id == null) return;
-  const mode = info.menuItemId === 'read-selection' ? 'selection' : 'page';
-  handlers.extract({ mode, tabId: tab.id }, {}).catch(console.warn);
+  const id = String(info.menuItemId);
+  const mode = id.endsWith('selection') ? 'selection' : 'page';
+  (id.startsWith('summarize') ? handlers.summarize : handlers.extract)({ mode, tabId: tab.id }, {}).catch(console.warn);
 });

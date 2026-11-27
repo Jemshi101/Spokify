@@ -30,6 +30,8 @@ The manifest pins the extension id (`llacpmmoocpaoaijceajaknlbdedennp`) with a p
 - PDFs: press Read on a PDF tab, or right-click a PDF link → **Read PDF aloud** (opens the built-in viewer)
 - Google Docs: press Read on a Docs tab; the document opens in Spokify's Docs reader in a new tab (Docs draws on a canvas, so it is read from its export with your Google sign-in)
 - Reading a page again resumes where you stopped (the player offers **Restart**)
+- **AI summary**: popup **✨ Summarize**, right-click **Summarize this page** / **Summarize selection**, or a shortcut you set. The summary shows in a panel on the page with **Read aloud** and **Copy**. It uses the browser's own on-device model through the standard Summarizer API (Gemini Nano in Chrome, Phi in Edge, 138+), so text never leaves the computer; long pages are summarized part by part, then together. Other browsers (Opera's Aria, Firefox) don't offer extensions a model, and the panel says so.
+- **Settings page** (popup → **All settings**): voice with a sample, speed, reading buttons, AI summaries (model status and download, style, length), shortcuts, storage, version
 
 First use downloads the voice (Kokoro ~330 MB, or a Piper voice ~63 MB; cached afterwards); the welcome page does this with a progress bar.
 
@@ -56,6 +58,8 @@ Supertonic 2 downloads from [supertone-oss-archive/supertonic-2](https://hugging
 | `src/content/index.ts` | Content script: the reader on web pages |
 | `src/pdf/viewer.ts` | PDF viewer (pdf.js canvas + text layer, line/paragraph/column breaks from geometry, sentences joined across page breaks, running headers/page numbers skipped) using the same reader |
 | `src/docs/viewer.ts`, `gdoc.ts` | Google Docs reader: renders the document's HTML export (styles scoped, comments and footnote markers removed, images via the extension) using the same reader |
+| `src/shared/summarize.ts`, `src/reader/summaryPanel.ts` | AI summaries with the browser's Summarizer API (model status, one-time download, part-by-part summaries of long pages, streaming) and the on-page summary panel |
 | `src/welcome/welcome.ts`, `src/popup/popup.ts`, `src/diag/diag.ts` | Welcome page, toolbar popup, diagnostics |
+| `src/options/options.ts`, `src/popup/voiceControls.ts` | Settings page; voice/engine/speed controls shared with the popup |
 
 Speed: Kokoro renders up to 1.5× itself; faster speeds use pitch-preserving playback rate on top, so changes apply instantly.

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spokify settings</title>
+<link rel="icon" href="icons/32.png">
+<style>
+  :root { --bg:#f6f6f9; --card:#fff; --fg:#1d1d1f; --muted:#62626b; --line:#dcdce2; --btn:#f4f4f7; --accent:#2f6fed; --warn:#9a5b00; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141418; --card:#1d1d22; --fg:#ececf0; --muted:#a0a0aa; --line:#3a3a44; --btn:#2a2a31; --accent:#6d9bff; --warn:#ffc46b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  header.top { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  header.top img { width: 40px; height: 40px; }
+  h1 { font-size: 22px; margin: 0; }
+  header.top p { margin: 0; color: var(--muted); }
+  nav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+  nav a { padding: 4px 10px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--fg); text-decoration: none; font-size: 13px; }
+  nav a:hover { border-color: var(--accent); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; scroll-margin-top: 16px; transition: box-shadow .6s; }
+  section.flash { box-shadow: 0 0 0 3px var(--accent); }
+  h2 { font-size: 16px; margin: 0 0 4px; }
+  .lead { margin: 0 0 14px; color: var(--muted); }
+  label { display: block; font-weight: 600; margin: 14px 0 6px; }
+  label:first-of-type { margin-top: 0; }
+  label.check { display: flex; align-items: flex-start; gap: 8px; font-weight: normal; cursor: pointer; margin: 10px 0 0; }
+  label.check input { margin: 3px 0 0; }
+  select { width: 100%; max-width: 420px; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; }
+  select[hidden] { display: none; }
+  input[type=range] { width: 100%; max-width: 420px; accent-color: var(--accent); }
+  button { padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--btn); color: var(--fg); cursor: pointer; font: inherit; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .6; cursor: default; }
+  button[hidden] { display: none; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .note[hidden] { display: none; }
+  #aiStatus { padding: 10px 12px; border-radius: 8px; background: var(--btn); }
+  #aiStatus[data-state=unsupported], #aiStatus[data-state=unavailable] { color: var(--warn); }
+  .track { height: 4px; max-width: 420px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 10px; }
+  .track[hidden] { display: none; }
+  #aiBar { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; max-width: 420px; }
+  .two label { margin-top: 14px; }
+  table { border-collapse: collapse; width: 100%; max-width: 520px; }
+  td { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; color: var(--muted); }
+  kbd { font: 12px ui-monospace, Menlo, monospace; padding: 2px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--btn); color: var(--fg); }
+  a.link { color: var(--accent); cursor: pointer; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  @media (max-width: 480px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <img src="icons/48.png" alt="">
+    <div><h1>Spokify settings</h1><p>Changes save as you make them.</p></div>
+  </header>
+  <nav aria-label="Sections">
+    <a href="#speech">Voice</a><a href="#reading">Reading</a><a href="#summaries">AI summaries</a><a href="#shortcuts">Shortcuts</a><a href="#storage">Storage</a><a href="#about">About</a>
+  </nav>
+
+  <section id="speech">
+    <h2>Voice</h2>
+    <p class="lead">Natural voices run on your computer; nothing you read is sent anywhere.</p>
+    <label for="engine">Engine</label>
+    <select id="engine"></select>
+    <div id="engineNote" class="note" hidden></div>
+    <label for="voice">Voice</label>
+    <select id="voice"></select>
+    <select id="stVoice" hidden aria-label="Voice"></select>
+    <select id="piperVoice" hidden aria-label="Voice"></select>
+    <select id="systemVoice" hidden aria-label="Voice"></select>
+    <label for="speed">Speed <span id="speedVal"></span></label>
+    <input id="speed" type="range" min="0.5" max="3" step="0.25">
+    <div class="row"><button id="sample">▶ Play a sample</button><span id="sampleMsg" class="note"></span></div>
+  </section>
+
+  <section id="reading">
+    <h2>Reading</h2>
+    <p class="lead">Buttons Spokify adds to pages.</p>
+    <label class="check"><input type="checkbox" id="selBtn"> Show a Read button when I select text</label>
+    <label class="check"><input type="checkbox" id="hoverBtn"> While reading, show a play button next to the sentence I hover, to continue from there</label>
+    <p class="note">Tip: Alt+click a paragraph to start reading from there.</p>
+  </section>
+
+  <section id="summaries">
+    <h2>AI summaries</h2>
+    <p class="lead">Summarize a page (or selected text) from the popup, the right-click menu or a shortcut, then have it read aloud. Spokify uses the AI built into your browser, so the page stays on your computer.</p>
+    <div id="aiStatus" role="status">Checking…</div>
+    <div class="row"><button id="aiDownload" class="primary" hidden>Download the AI model</button></div>
+    <div id="aiTrack" class="track" hidden><div id="aiBar"></div></div>
+    <div class="two">
+      <div>
+        <label for="summaryType">Style</label>
+        <select id="summaryType">
+          <option value="key-points">Key points (a list)</option>
+          <option value="tldr">Short paragraph</option>
+        </select>
+      </div>
+      <div>
+        <label for="summaryLength">Length</label>
+        <select id="summaryLength">
+          <option value="short">Short</option>
+          <option value="medium">Medium</option>
+          <option value="long">Long</option>
+        </select>
+      </div>
+    </div>
+    <p class="note">Works in Chrome and Microsoft Edge 138 or later. Other browsers, including Opera, don't let extensions use their AI.</p>
+  </section>
+
+  <section id="shortcuts">
+    <h2>Keyboard shortcuts</h2>
+    <table><tbody id="shortcutList"></tbody></table>
+    <div class="row"><button id="changeShortcuts">Change shortcuts</button></div>
+  </section>
+
+  <section id="storage">
+    <h2>Storage</h2>
+    <p id="storageMsg" class="lead" style="margin:0"></p>
+  </section>
+
+  <section id="about">
+    <h2>About</h2>
+    <dl>
+      <dt>Version</dt><dd id="version"></dd>
+      <dt>Help</dt><dd><a class="link" id="welcome">Getting started</a> · <a class="link" id="diag">Diagnostics</a> · <a class="link" href="https://github.com/Jemshi101/Spokify/releases" target="_blank" rel="noopener">Release notes</a></dd>
+    </dl>
+  </section>
+</main>
+<script src="options.js" type="module"></script>
+</body>
+</html>

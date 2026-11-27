@@ -20,7 +20,13 @@ export interface Settings {
   /** speechSynthesis voiceURI for lite mode ('' = browser default English voice). */
   systemVoice: string;
   speed: number;
+  /** AI summaries: a list of key points, or a short paragraph. */
+  summaryType: SummaryType;
+  summaryLength: SummaryLength;
 }
+
+export type SummaryType = 'key-points' | 'tldr';
+export type SummaryLength = 'short' | 'medium' | 'long';
 
 export const DEFAULT_PIPER_VOICE = 'en_US-lessac-medium';
 export const DEFAULT_SUPERTONIC_VOICE = 'F1';
@@ -33,6 +39,8 @@ export const DEFAULT_SETTINGS: Settings = {
   hoverPlay: true,
   systemVoice: '',
   speed: 1,
+  summaryType: 'key-points',
+  summaryLength: 'medium',
 };
 
 export const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
@@ -128,6 +136,8 @@ export async function loadSettings(): Promise<Settings> {
   if (s.engine !== 'auto' && s.engine !== 'system' && !(s.engine in ENGINES)) s.engine = 'auto';
   if (!PIPER_VOICES.some((v) => v.id === s.piperVoice)) s.piperVoice = DEFAULT_PIPER_VOICE;
   if (!SUPERTONIC_VOICES.some((v) => v.id === s.supertonicVoice)) s.supertonicVoice = DEFAULT_SUPERTONIC_VOICE;
+  if (s.summaryType !== 'key-points' && s.summaryType !== 'tldr') s.summaryType = DEFAULT_SETTINGS.summaryType;
+  if (!['short', 'medium', 'long'].includes(s.summaryLength)) s.summaryLength = DEFAULT_SETTINGS.summaryLength;
   return s;
 }
 

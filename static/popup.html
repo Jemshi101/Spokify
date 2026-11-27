@@ -28,6 +28,9 @@
     <button id="readPage" class="primary">Read page</button>
     <button id="readSel">Read selection</button>
   </div>
+  <div class="row">
+    <button id="summarize" title="Summarize this page (or the selected text) with the browser's built-in AI">✨ Summarize</button>
+  </div>
   <div class="row" id="controls" hidden>
     <button id="prev">⏮</button>
     <button id="toggle">Pause</button>
@@ -48,7 +51,7 @@
   <label class="check"><input type="checkbox" id="hoverBtn"> While reading, show a play button next to the sentence I hover</label>
   <div id="msg"></div>
   <div class="hint">Tip: select text and press Read (or Alt+Shift+R) to hear just that; Alt+click a paragraph to start reading from there.</div>
-  <div class="links"><a id="shortcuts">Keyboard shortcuts</a><a id="diag">Diagnostics</a></div>
+  <div class="links"><a id="settings">All settings</a><a id="diag">Diagnostics</a></div>
   <script src="popup.js" type="module"></script>
 </body>
 </html>
